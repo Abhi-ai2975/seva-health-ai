@@ -391,6 +391,9 @@ class ClinicianCopilotEngine:
         if actor.role not in [UserRole.CLINICIAN, UserRole.SYSTEM_ADMIN]:
             raise PermissionError(f"Only licensed clinicians can verify or act on clinical copilot sessions. Actor role: {actor.role.value}")
 
+        # Enforce care context and patient authorization
+        HealthcareAuthorizationEngine.enforce_citizen_access(actor, citizen, purpose="CLINICAL_ACTION")
+
         # Fetch current draft
         draft = store.get_copilot_draft(citizen_id)
         if not draft:

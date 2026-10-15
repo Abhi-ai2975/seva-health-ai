@@ -69,6 +69,7 @@ class HypertensionRiskModel(RiskModel):
                 input_snapshot=clean_inputs,
                 risk_factor_contributions=[],
                 confidence=0.0,
+                missing_requirements=list(missing_mandatory),
                 limitations=[f"Missing mandatory vascular pressure measurements: {', '.join(missing_mandatory)}."],
                 recommended_next_step="Perform seated bilateral blood pressure screening measurement.",
                 is_clinically_validated=self.is_clinically_validated(),

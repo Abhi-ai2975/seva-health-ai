@@ -68,12 +68,16 @@ async def sync_wearable_data(
     if not citizen:
         raise HTTPException(status_code=404, detail="Citizen not found")
 
-    # Verify revocable WEARABLE_DATA consent
+    # Verify revocable WEARABLE_DATA consent across consent_manager and adapter connections
     wearable_consents = consent_manager.list_consents(subject=citizen_id, category=ConsentCategory.WEARABLE_DATA)
-    if any(c.status == ConsentStatus.REVOKED for c in wearable_consents) or (wearable_consents and all(not c.is_valid() for c in wearable_consents)):
+    conn_states = wearable_adapter.connections.get(citizen_id, {})
+    is_adapter_revoked = any(c.status == "REVOKED" or c.consent_revoked_at is not None for c in conn_states.values())
+    is_consent_revoked = any(c.status == ConsentStatus.REVOKED for c in wearable_consents)
+
+    if is_adapter_revoked or is_consent_revoked or (wearable_consents and all(not c.is_valid() for c in wearable_consents)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Wearable access has been REVOKED by citizen in the Citizen Privacy Center.",
+            detail="Wearable access has been REVOKED by citizen. Synchronization is blocked.",
         )
 
     records = await wearable_adapter.sync(
@@ -215,7 +219,53 @@ async def revoke_wearable_consent(
 ):
     """Halts all wearable telemetry ingestion and marks connections as revoked."""
     success = await wearable_adapter.revoke_consent(citizen_id)
-    return {"status": "CONSENT_REVOKED", "citizen_id": citizen_id}
+
+    # Revoke in consent_manager and store as well
+    wearable_consents = consent_manager.list_consents(subject=citizen_id, category=ConsentCategory.WEARABLE_DATA)
+    for c in wearable_consents:
+        consent_manager.revoke(
+            consent_id=c.id,
+            reason="Revoked continuous wearable data stream",
+            actor_id=current_user.sub,
+            actor_role=current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role),
+        )
+        store.revoke_consent(citizen_id, c.id)
+
+    audit_logger.record(
+        tenant_id=current_user.tenant_id,
+        actor_id=current_user.sub,
+        actor_role=current_user.role,
+        action=AuditAction.CONSENT_REVOKED,
+        resource_type="WearableConsent",
+        resource_id=citizen_id,
+        details={"status": "REVOKED", "retention_policy": "RETAINED_FOR_AUDIT_TRAIL"}
+    )
+    return {
+        "status": "CONSENT_REVOKED",
+        "citizen_id": citizen_id,
+        "future_sync_blocked": True,
+        "retention_policy": "RETAINED_FOR_AUDIT_TRAIL",
+    }
+
+
+@router.get("/retention-policy/{citizen_id}")
+async def get_wearable_retention_policy(
+    citizen_id: str,
+    current_user: TokenPayload = Depends(get_current_user_token)
+):
+    """Returns data retention policy and current consent/revocation status for citizen wearables."""
+    conn_states = wearable_adapter.connections.get(citizen_id, {})
+    is_revoked = any(c.status == "REVOKED" or c.consent_revoked_at is not None for c in conn_states.values())
+    raw_records_count = len(wearable_adapter.raw_records.get(citizen_id, []))
+    return {
+        "citizen_id": citizen_id,
+        "is_revoked": is_revoked,
+        "future_sync_blocked": is_revoked,
+        "existing_records_count": raw_records_count,
+        "retention_policy": "RETAINED_FOR_AUDIT_TRAIL",
+        "purge_available": True,
+        "purge_endpoint": f"/api/v1/wearables/data/{citizen_id}",
+    }
 
 
 @router.delete("/data/{citizen_id}")
@@ -230,6 +280,20 @@ async def delete_citizen_wearable_data(
         "citizen_id": citizen_id,
         "message": "All wearable telemetry and rolling projections have been completely deleted."
     }
+
+
+@router.get("/{citizen_id}/observations", summary="Retrieve Normalized Wearable Observations")
+async def get_normalized_wearable_observations(
+    citizen_id: str,
+    current_user: TokenPayload = Depends(get_current_user_token)
+):
+    """Retrieves all normalized wearable observations retaining source, timestamp, and unit (TC-INT-004)."""
+    citizen = store.get_citizen(citizen_id)
+    if not citizen:
+        raise HTTPException(status_code=404, detail="Citizen not found")
+    all_obs = store.get_citizen_observations(citizen_id)
+    wearable_obs = [o for o in all_obs if (o.source and "WEARABLE" in o.source.upper())]
+    return [o.to_dict() for o in wearable_obs]
 
 
 @router.get("/{citizen_id}")

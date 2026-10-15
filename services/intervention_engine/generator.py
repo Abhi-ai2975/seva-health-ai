@@ -76,5 +76,24 @@ def generate_30_day_care_plan(
         sleep_guidance=sleep_guidance,
         stress_guidance=stress_guidance,
         daily_tasks=comp_plan.daily_tasks,
+        goals=[g.title for g in comp_plan.goals],
+        actions=[
+            {
+                "id": a.id,
+                "title": a.title,
+                "description": a.description,
+                "frequency": a.frequency,
+                "category": a.category.value if hasattr(a.category, "value") else str(a.category),
+                "priority_level": a.priority_level.value if hasattr(a.priority_level, "value") else a.priority_level,
+                "evidence_citation": a.evidence_citation,
+            }
+            for a in comp_plan.actions
+        ],
+        frequency=comp_plan.frequency,
+        follow_up_timing=comp_plan.follow_up_timing,
+        limitations=list(comp_plan.limitations),
+        version=1,
+        history=[],
         clinician_reviewed=(not comp_plan.clinician_workflow_required),
     )
+

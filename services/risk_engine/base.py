@@ -180,6 +180,7 @@ class DomainRiskResult(BaseModel):
     input_snapshot: Dict[str, Any]          # Normalized inputs with units used for calculation
     risk_factor_contributions: List[RiskFactorContribution] = []
     confidence: float                       # 0.0 to 1.0 based on data completeness & sensor quality
+    missing_requirements: List[str] = Field(default_factory=list) # Essential requirements absent
     limitations: List[str]                  # Explicit boundaries, proxies used, missing factors
     recommended_next_step: str              # Actionable clinical / lifestyle directive
     is_clinically_validated: bool           # True if peer-reviewed guideline; False if heuristic/demo

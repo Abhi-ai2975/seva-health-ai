@@ -159,6 +159,11 @@ class MetricsCollector:
         self.audit_by_action = defaultdict(int)
         self.audit_by_role = defaultdict(int)
 
+        # 17. Dashboard Metrics (TC-PERF-002)
+        self.dashboard_queries_total = 0
+        self.dashboard_latency = LatencyTracker()
+        self.dashboard_latency_by_query: Dict[str, LatencyTracker] = defaultdict(LatencyTracker)
+
     # Record API request
     def record_api_request(self, method: str, path: str, status_code: int, duration_ms: float):
         route_key = f"{method} {path}"
@@ -315,6 +320,13 @@ class MetricsCollector:
     def record_log(self, level: str):
         with self._lock:
             self.log_counts[level.upper()] += 1
+
+    # Record Dashboard Query (TC-PERF-002)
+    def record_dashboard_query(self, query_name: str, duration_ms: float):
+        with self._lock:
+            self.dashboard_queries_total += 1
+        self.dashboard_latency.record(duration_ms)
+        self.dashboard_latency_by_query[query_name].record(duration_ms)
 
     def get_summary(self) -> Dict[str, Any]:
         """Provides full snapshot of all operational metrics."""

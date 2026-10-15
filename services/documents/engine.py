@@ -71,19 +71,22 @@ class ClinicalDocumentIngestionEngine:
         """Executes the full 10-stage ingestion pipeline with strict quality gates."""
 
         # 1. Preservation & Hash Computation (Stage 1: UPLOAD)
+        from packages.security.path_traversal_guard import StorageVaultManager
         doc_id = f"doc-{uuid.uuid4().hex[:12]}"
         sha256_hash = hashlib.sha256(file_content).hexdigest()
-        storage_path = f"/storage/vault/{citizen_id}/{doc_id}/{filename}"
+        clean_filename = StorageVaultManager.sanitize_filename(filename, strict=False)
+        storage_path, physical_path = StorageVaultManager.get_safe_storage_path(citizen_id, doc_id, clean_filename)
 
         # Immutable Preservation of Original File
         store.document_files[doc_id] = {
             "document_id": doc_id,
             "citizen_id": citizen_id,
-            "filename": filename,
+            "filename": clean_filename,
             "content_type": content_type,
             "size_bytes": len(file_content),
             "sha256_hash": sha256_hash,
             "storage_path": storage_path,
+            "physical_path": str(physical_path),
             "raw_bytes": file_content,
             "uploaded_by": uploader_id,
             "uploaded_at": datetime.now(timezone.utc).isoformat(),
@@ -92,8 +95,8 @@ class ClinicalDocumentIngestionEngine:
         metadata = DocumentMetadata(
             document_id=doc_id,
             citizen_id=citizen_id,
-            title=title or filename,
-            filename=filename,
+            title=title or clean_filename,
+            filename=clean_filename,
             content_type=content_type,
             size_bytes=len(file_content),
             sha256_hash=sha256_hash,
@@ -107,8 +110,8 @@ class ClinicalDocumentIngestionEngine:
         store.documents[citizen_id].append({
             "id": doc_id,
             "citizen_id": citizen_id,
-            "title": title,
-            "filename": filename,
+            "title": title or clean_filename,
+            "filename": clean_filename,
             "content_type": content_type,
             "size_bytes": len(file_content),
             "sha256_hash": sha256_hash,

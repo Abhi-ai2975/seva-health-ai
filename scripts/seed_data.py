@@ -685,4 +685,9 @@ def seed_all_demo_data():
 
 
 if __name__ == "__main__":
+    if "--reset" in sys.argv:
+        print("[RESET] Triggering demo environment reset before seeding clean baseline...")
+        from services.demo.challenge_workflow import reset_challenge_demo
+        res = reset_challenge_demo()
+        print(f"  [OK] Reset status: {res.get('status')}")
     seed_all_demo_data()

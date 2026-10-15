@@ -91,6 +91,7 @@ class CKDRiskModel(RiskModel):
                 input_snapshot=clean_inputs,
                 risk_factor_contributions=[],
                 confidence=0.0,
+                missing_requirements=["EGFR or SERUM_CREATININE or Cardiovascular Comorbidities (SYSTOLIC_BP, HBA1C, FASTING_GLUCOSE)"],
                 limitations=["No renal filtration markers (eGFR/serum creatinine) or cardiovascular comorbidities provided."],
                 recommended_next_step="Order basic metabolic panel with serum creatinine and estimated GFR.",
                 is_clinically_validated=False,

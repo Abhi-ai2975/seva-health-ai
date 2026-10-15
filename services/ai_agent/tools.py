@@ -557,7 +557,36 @@ def get_wearable_summary(citizen_id: str, actor: TokenPayload) -> Dict[str, Any]
     """Retrieves 7-day rolling baselines and telemetry deviations from connected wearables."""
     _authorize_and_get_citizen(citizen_id, actor, tool_name="get_wearable_summary")
 
+    # Enforce revocation guard: AI cannot process wearable data if citizen revoked consent
+    from packages.clinical_models.consent import consent_manager, ConsentCategory, ConsentStatus
+    from services.wearable.adapter import wearable_adapter
+
+    wearable_consents = consent_manager.list_consents(subject=citizen_id, category=ConsentCategory.WEARABLE_DATA)
+    conn_states = wearable_adapter.connections.get(citizen_id, {})
+    is_adapter_revoked = any(c.status == "REVOKED" or c.consent_revoked_at is not None for c in conn_states.values())
+    is_consent_revoked = any(c.status == ConsentStatus.REVOKED for c in wearable_consents)
+
+    if is_adapter_revoked or is_consent_revoked:
+        agent_telemetry.log_tool_call(
+            tool_name="get_wearable_summary",
+            citizen_id=citizen_id,
+            actor_id=actor.sub,
+            actor_role=actor.role.value if hasattr(actor.role, "value") else str(actor.role),
+            arguments={"citizen_id": citizen_id},
+            status="CONSENT_REVOKED",
+            details=f"Wearable access has been revoked by citizen '{citizen_id}'. AI processing is blocked.",
+        )
+        raise PermissionError(f"Access Denied: Citizen '{citizen_id}' has revoked consent for wearable data processing.")
+
     wearable_records = store.wearable_data.get(citizen_id, [])
+    if not wearable_records and citizen_id in wearable_adapter.raw_records:
+        # Also inspect adapter raw records for live telemetry
+        raw_recs = wearable_adapter.raw_records[citizen_id]
+        wearable_records = [
+            {"resting_heart_rate": r.value} if r.metric.value == "resting_heart_rate" else {"steps": r.value}
+            for r in raw_recs
+        ]
+
     if not wearable_records:
         summary = {
             "citizen_id": citizen_id,
@@ -857,3 +886,110 @@ def request_clinician_review(
         "review_status": "PENDING",
         "message": "Case routed to primary healthcare clinician review queue.",
     }
+
+
+def summarize_for_clinician_tool(citizen_id: str, actor: TokenPayload, **kwargs) -> Any:
+    """Invokes SOAP clinical summarization tool."""
+    from services.ai_agent.prevention_agent import prevention_agent
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return pool.submit(asyncio.run, prevention_agent.summarize_for_clinician(citizen_id, actor)).result()
+        else:
+            return loop.run_until_complete(prevention_agent.summarize_for_clinician(citizen_id, actor))
+    except Exception:
+        return asyncio.run(prevention_agent.summarize_for_clinician(citizen_id, actor))
+
+
+# Restricted clinical tools requiring professional clinical authorization (TC-AI-005)
+CLINICAL_RESTRICTED_TOOLS = {
+    "request_clinician_review",
+    "create_alert",
+    "get_clinical_history",
+    "summarize_for_clinician",
+}
+
+TOOL_REGISTRY = {
+    "get_patient_profile": get_patient_profile,
+    "get_latest_vitals": get_latest_vitals,
+    "get_recent_labs": get_recent_labs,
+    "get_risk_assessment": get_risk_assessment,
+    "get_risk_trajectory": get_risk_trajectory,
+    "get_intervention_plan": get_intervention_plan,
+    "get_wearable_summary": get_wearable_summary,
+    "get_medication_list": get_medication_list,
+    "get_clinical_history": get_clinical_history,
+    "create_checkin": create_checkin,
+    "create_followup": create_followup,
+    "create_alert": create_alert,
+    "request_clinician_review": request_clinician_review,
+    "summarize_for_clinician": summarize_for_clinician_tool,
+}
+
+
+def invoke_agent_tool(
+    tool_name: str,
+    citizen_id: str,
+    actor: TokenPayload,
+    arguments: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """Secure dispatcher for executing registered AI tools with independent authorization enforcement.
+
+    CRITICAL (TC-AI-005): Enforces authorization rules independently of the LLM's generated intent.
+    Users lacking clinical access are strictly rejected from invoking restricted clinical-data tools.
+    """
+    if tool_name not in TOOL_REGISTRY:
+        agent_telemetry.log_tool_call(
+            tool_name=tool_name,
+            citizen_id=citizen_id,
+            actor_id=actor.sub,
+            actor_role=actor.role.value if hasattr(actor.role, "value") else str(actor.role),
+            arguments=arguments or {},
+            status="REJECTED",
+            details=f"Tool '{tool_name}' is not in the authorized tool whitelist.",
+        )
+        raise ValueError(f"Unknown or unauthorized tool: '{tool_name}'")
+
+    args = arguments or {}
+
+    # 1. Enforce RBAC for clinical-restricted tools
+    if tool_name in CLINICAL_RESTRICTED_TOOLS:
+        if tool_name in ["request_clinician_review", "create_alert", "get_clinical_history"]:
+            allowed_roles = [UserRole.CLINICIAN, UserRole.PUBLIC_HEALTH_ADMIN, UserRole.SYSTEM_ADMIN, UserRole.HEALTH_WORKER]
+        else:
+            allowed_roles = [UserRole.CLINICIAN, UserRole.PUBLIC_HEALTH_ADMIN, UserRole.SYSTEM_ADMIN]
+
+        if actor.role not in allowed_roles:
+            agent_telemetry.log_tool_call(
+                tool_name=tool_name,
+                citizen_id=citizen_id,
+                actor_id=actor.sub,
+                actor_role=actor.role.value if hasattr(actor.role, "value") else str(actor.role),
+                arguments=args,
+                status="UNAUTHORIZED",
+                details=f"Actor with role '{actor.role}' lacks clinical access required for restricted tool '{tool_name}'.",
+            )
+            raise PermissionError(
+                f"Unauthorized tool execution (TC-AI-005): Actor with role '{actor.role}' lacks clinical access required for tool '{tool_name}'."
+            )
+
+    # 2. Enforce citizen record access authorization
+    _authorize_and_get_citizen(citizen_id=citizen_id, actor=actor, tool_name=tool_name)
+
+    # 3. Dispatch to underlying tool function
+    fn = TOOL_REGISTRY[tool_name]
+    if tool_name == "create_checkin":
+        return fn(citizen_id=citizen_id, checkin_data=args, actor=actor)
+    elif tool_name == "create_followup":
+        return fn(citizen_id=citizen_id, followup_data=args, actor=actor)
+    elif tool_name == "create_alert":
+        return fn(citizen_id=citizen_id, alert_data=args, actor=actor)
+    elif tool_name == "request_clinician_review":
+        reason = args.get("reason", "AI Decision Support Review Request")
+        urgency = args.get("urgency", "PRIORITY")
+        return fn(citizen_id=citizen_id, reason=reason, urgency=urgency, actor=actor)
+    else:
+        return fn(citizen_id=citizen_id, actor=actor)

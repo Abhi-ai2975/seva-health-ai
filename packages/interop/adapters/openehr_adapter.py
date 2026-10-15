@@ -8,6 +8,7 @@ typed methods.
 
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
+import uuid
 import httpx
 import structlog
 
@@ -56,6 +57,15 @@ class OpenEhrEhrBaseAdapter(ClinicalDataProvider):
             self._local_compositions[patient_id] = []
         self._local_compositions[patient_id].append(composition)
 
+    async def save_composition(self, patient_id: str, composition: Dict[str, Any]) -> str:
+        """Writes a supported openEHR clinical composition through the adapter (TC-INT-006)."""
+        uid = composition.get("uid", {}).get("value") if isinstance(composition.get("uid"), dict) else composition.get("uid")
+        if not uid:
+            uid = f"{uuid.uuid4()}::ehrbase.sevahealth.in::1"
+            composition["uid"] = {"value": uid}
+        self.store_local_composition(patient_id, composition)
+        return uid
+
     async def get_patient(self, patient_id: str, context: AccessContext) -> Optional[NormalizedPatient]:
         # openEHR stores EHR status; patient demographics typically referenced via external subject_id
         return NormalizedPatient(
@@ -78,61 +88,158 @@ class OpenEhrEhrBaseAdapter(ClinicalDataProvider):
         compositions = self._local_compositions.get(patient_id, [])
 
         for comp in compositions:
-            # Parse vitals or lab compositions
-            archetype_id = comp.get("archetype_details", {}).get("archetype_id", {}).get("value", "")
+            archetype_id = (
+                comp.get("archetype_details", {}).get("archetype_id", {}).get("value", "")
+                or comp.get("archetype_node_id", "")
+            )
             comp_name = comp.get("name", {}).get("value", "")
+            uid_field = comp.get("uid")
+            comp_uid = uid_field.get("value") if isinstance(uid_field, dict) else str(uid_field or "")
+            composer_name = comp.get("composer", {}).get("name") if isinstance(comp.get("composer"), dict) else None
 
             # 1. Vital Signs Archetype (openEHR-EHR-COMPOSITION.encounter.v1 / vital_signs)
-            if "vital" in comp_name.lower() or "vital_signs" in archetype_id:
-                if category and category != ObservationCategory.VITAL_SIGN:
-                    continue
-                # Extract systolic/diastolic or pulse
-                items = comp.get("content", [])
-                for item in items:
-                    name = item.get("name", {}).get("value", "Observation")
-                    val = item.get("data", {}).get("magnitude", 0.0)
-                    units = item.get("data", {}).get("units", "")
-                    code = item.get("archetype_node_id", "at0001")
+            if "vital" in comp_name.lower() or "vital_signs" in archetype_id or "encounter" in archetype_id:
+                if not (category and category != ObservationCategory.VITAL_SIGN):
+                    content = comp.get("content", [])
+                    for obs_node in content:
+                        obs_archetype = obs_node.get("archetype_node_id", "")
+                        obs_name = obs_node.get("name", {}).get("value", "Observation")
 
-                    observations.append(
-                        NormalizedObservation(
-                            patient_id=patient_id,
-                            source_system=self.source_system,
-                            source_record_id=comp.get("uid", {}).get("value"),
-                            code=f"OPENEHR::{code}",
-                            display_name=name,
-                            category=ObservationCategory.VITAL_SIGN,
-                            value=float(val),
-                            unit=units,
-                            effective_datetime=datetime.now(timezone.utc),
-                            status="FINAL",
-                        )
-                    )
+                        # Handle openEHR history events
+                        events = obs_node.get("data", {}).get("events", [])
+                        if events:
+                            for event in events:
+                                dt_str = event.get("time", {}).get("value")
+                                dt = datetime.now(timezone.utc)
+                                if dt_str:
+                                    try:
+                                        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                                    except Exception:
+                                        pass
+                                sub_items = event.get("data", {}).get("items", [])
+                                for sub in sub_items:
+                                    sub_name = sub.get("name", {}).get("value", obs_name)
+                                    sub_code = sub.get("archetype_node_id", "at0001")
+                                    val_dict = sub.get("value", {})
+                                    mag = float(val_dict.get("magnitude", 0.0))
+                                    units = val_dict.get("units", "")
+
+                                    observations.append(
+                                        NormalizedObservation(
+                                            patient_id=patient_id,
+                                            source_system=self.source_system,
+                                            source_record_id=comp_uid,
+                                            code=f"OPENEHR::{obs_archetype}::{sub_code}",
+                                            display_name=f"{obs_name} - {sub_name}",
+                                            category=ObservationCategory.VITAL_SIGN,
+                                            value=mag,
+                                            unit=units,
+                                            effective_datetime=dt,
+                                            status="FINAL",
+                                            metadata={
+                                                "archetype_id": obs_archetype,
+                                                "composer": composer_name,
+                                            },
+                                        )
+                                    )
+                        elif "data" in obs_node and "magnitude" in obs_node.get("data", {}):
+                            # Flat structure
+                            val = float(obs_node.get("data", {}).get("magnitude", 0.0))
+                            units = obs_node.get("data", {}).get("units", "")
+                            code = obs_node.get("archetype_node_id", "at0001")
+                            observations.append(
+                                NormalizedObservation(
+                                    patient_id=patient_id,
+                                    source_system=self.source_system,
+                                    source_record_id=comp_uid,
+                                    code=f"OPENEHR::{code}",
+                                    display_name=obs_name,
+                                    category=ObservationCategory.VITAL_SIGN,
+                                    value=val,
+                                    unit=units,
+                                    effective_datetime=datetime.now(timezone.utc),
+                                    status="FINAL",
+                                )
+                            )
 
             # 2. Laboratory Report Archetype
-            elif "laboratory" in comp_name.lower() or "lab" in archetype_id:
-                if category and category != ObservationCategory.LABORATORY:
-                    continue
-                items = comp.get("content", [])
-                for item in items:
-                    name = item.get("name", {}).get("value", "Lab Result")
-                    val = item.get("data", {}).get("magnitude", 0.0)
-                    units = item.get("data", {}).get("units", "")
+            if "laboratory" in comp_name.lower() or "lab" in archetype_id or "report-result" in archetype_id:
+                if not (category and category != ObservationCategory.LABORATORY):
+                    content = comp.get("content", [])
+                    for obs_node in content:
+                        obs_archetype = obs_node.get("archetype_node_id", "")
+                        events = obs_node.get("data", {}).get("events", [])
+                        if events:
+                            for event in events:
+                                dt_str = event.get("time", {}).get("value")
+                                dt = datetime.now(timezone.utc)
+                                if dt_str:
+                                    try:
+                                        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                                    except Exception:
+                                        pass
+                                sub_items = event.get("data", {}).get("items", [])
+                                test_name = "Lab Result"
+                                loinc_code = None
+                                val = 0.0
+                                units = ""
+                                interp = None
+                                ref_range = None
+                                for sub in sub_items:
+                                    name_val = sub.get("name", {}).get("value", "")
+                                    if "Test name" in name_val:
+                                        v_obj = sub.get("value", {})
+                                        test_name = v_obj.get("value", "Lab Result")
+                                        loinc_code = v_obj.get("defining_code", {}).get("code_string")
+                                    elif "Result value" in name_val:
+                                        v_obj = sub.get("value", {})
+                                        val = float(v_obj.get("magnitude", 0.0))
+                                        units = v_obj.get("units", "")
+                                    elif "Interpretation" in name_val:
+                                        interp = sub.get("value", {}).get("value")
+                                    elif "Reference range" in name_val:
+                                        ref_range = sub.get("value", {}).get("value")
 
-                    observations.append(
-                        NormalizedObservation(
-                            patient_id=patient_id,
-                            source_system=self.source_system,
-                            source_record_id=comp.get("uid", {}).get("value"),
-                            code=f"OPENEHR::LAB_{name.upper().replace(' ', '_')}",
-                            display_name=name,
-                            category=ObservationCategory.LABORATORY,
-                            value=float(val),
-                            unit=units,
-                            effective_datetime=datetime.now(timezone.utc),
-                            status="FINAL",
-                        )
-                    )
+                                observations.append(
+                                    NormalizedObservation(
+                                        patient_id=patient_id,
+                                        source_system=self.source_system,
+                                        source_record_id=comp_uid,
+                                        code=f"LOINC::{loinc_code}" if loinc_code else f"OPENEHR::{test_name}",
+                                        display_name=test_name,
+                                        category=ObservationCategory.LABORATORY,
+                                        value=val,
+                                        unit=units,
+                                        interpretation=interp,
+                                        effective_datetime=dt,
+                                        status="FINAL",
+                                        metadata={
+                                            "archetype_id": obs_archetype,
+                                            "reference_range": ref_range,
+                                            "loinc_code": loinc_code,
+                                            "composer": composer_name,
+                                        },
+                                    )
+                                )
+                        elif "data" in obs_node and "magnitude" in obs_node.get("data", {}):
+                            # Flat fallback
+                            name = obs_node.get("name", {}).get("value", "Lab Result")
+                            val = float(obs_node.get("data", {}).get("magnitude", 0.0))
+                            units = obs_node.get("data", {}).get("units", "")
+                            observations.append(
+                                NormalizedObservation(
+                                    patient_id=patient_id,
+                                    source_system=self.source_system,
+                                    source_record_id=comp_uid,
+                                    code=f"OPENEHR::LAB_{name.upper().replace(' ', '_')}",
+                                    display_name=name,
+                                    category=ObservationCategory.LABORATORY,
+                                    value=val,
+                                    unit=units,
+                                    effective_datetime=datetime.now(timezone.utc),
+                                    status="FINAL",
+                                )
+                            )
 
         return observations
 

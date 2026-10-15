@@ -70,3 +70,6 @@ desktop.ini
 *.sqlite
 *.sqlite3
 *.db
+
+# Scratch and temp files
+scratch/

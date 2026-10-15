@@ -87,8 +87,14 @@ class HealthcareConsent(BaseModel):
     expires_at: Optional[str] = None
     revoked_at: Optional[str] = None
     version: str = Field(default="v1.0.0", description="Policy or template version")
+    notice_id: Optional[str] = Field(default="SYS-CON-001-NOTICE-V1", description="Applicable consent notice ID presented")
     status: ConsentStatus = Field(default=ConsentStatus.ACTIVE)
     audit_trail: List[ConsentAuditEvent] = Field(default_factory=list)
+
+    @property
+    def timestamp(self) -> str:
+        """Alias for created_at representing persisted consent timestamp."""
+        return self.created_at
 
     @property
     def citizen_id(self) -> str:
@@ -205,6 +211,7 @@ class ConsentManager:
         recipient: str = "PRIMARY_CARE_TEAM",
         expires_at: Optional[Union[str, datetime]] = None,
         version: str = "v1.0.0",
+        notice_id: Optional[str] = "SYS-CON-001-NOTICE-V1",
         actor_id: str = "citizen",
         actor_role: str = "CITIZEN",
     ) -> HealthcareConsent:
@@ -221,6 +228,7 @@ class ConsentManager:
             recipient=recipient,
             expires_at=exp_str,
             version=version,
+            notice_id=notice_id,
             status=ConsentStatus.ACTIVE,
         )
 
@@ -314,12 +322,13 @@ class ConsentManager:
         self,
         subject: str,
         category: Union[ConsentCategory, str],
+        purpose: Optional[str] = None,
         recipient: Optional[str] = None,
         required_scope: Optional[str] = None,
         actor_id: str = "ai_agent",
         actor_role: str = "AI_SYSTEM",
     ) -> Tuple[bool, str]:
-        """Verifies if there is an active, valid consent directive for the subject and category."""
+        """Verifies if there is an active, valid consent directive for the subject, category, and purpose."""
         cat_enum = ConsentCategory(category) if isinstance(category, str) else category
         consents = self.list_consents(subject=subject, category=cat_enum, status=ConsentStatus.ACTIVE)
 
@@ -331,6 +340,29 @@ class ConsentManager:
                 f"Consent verification failed: No active consent for subject '{subject}' under category '{cat_enum.value}'."
             )
 
+        # Purpose check to prevent purpose mismatch (TC-CON-003)
+        if purpose:
+            def _norm(p: Optional[str]) -> str:
+                return (p or "").upper().replace("-", "_").replace(" ", "_")
+            req_p = _norm(purpose)
+            matched_by_purpose = []
+            for c in valid_consents:
+                dir_p = _norm(c.purpose)
+                if dir_p in ("*", "ALL") or dir_p == req_p:
+                    matched_by_purpose.append(c)
+                elif req_p in ("CARE_DELIVERY", "CLINICAL_CARE") and dir_p in ("CARE_DELIVERY", "CLINICAL_CARE"):
+                    matched_by_purpose.append(c)
+                elif req_p in ("HEALTH_SCREENING", "SCREENING") and dir_p in ("HEALTH_SCREENING", "SCREENING"):
+                    matched_by_purpose.append(c)
+                elif req_p in ("RESEARCH_ANALYTICS", "RESEARCH") and dir_p in ("RESEARCH_ANALYTICS", "RESEARCH"):
+                    matched_by_purpose.append(c)
+            if not matched_by_purpose:
+                return (
+                    False,
+                    f"Consent purpose mismatch: Active directive was granted for purpose '{valid_consents[0].purpose}', but requested purpose is '{purpose}'. Processing outside granted scope is denied."
+                )
+            valid_consents = matched_by_purpose
+
         # Check recipient if specified
         matched_consent = None
         for c in valid_consents:
@@ -341,12 +373,17 @@ class ConsentManager:
                     break
 
         if not matched_consent:
+            if required_scope:
+                return (
+                    False,
+                    f"Consent scope mismatch: Requested data scope '{required_scope}' is outside permitted scopes {valid_consents[0].scope}."
+                )
             matched_consent = valid_consents[0]
 
         matched_consent.record_access(
             actor_id=actor_id,
             actor_role=actor_role,
-            details=f"Verified active consent for {cat_enum.value} access (recipient: {recipient or 'ANY'})",
+            details=f"Verified active consent for {cat_enum.value} access (purpose: {purpose or matched_consent.purpose}, recipient: {recipient or 'ANY'})",
             granted=True,
         )
 

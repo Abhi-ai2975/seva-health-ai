@@ -82,6 +82,7 @@ class ConfigurableScreeningSubmission(BaseModel):
     answers: Dict[str, Any]                  # key: question_id -> value
     notes: Optional[str] = None
     screening_location: Optional[str] = "COMMUNITY_FIELD_CAMP"
+    allow_incomplete: bool = False           # If True, records as INCOMPLETE state instead of rejection
 
 
 class ExplainableScreeningSummary(BaseModel):
@@ -124,7 +125,11 @@ class ScreeningEvaluationResponse(BaseModel):
     screening_session_id: str
     citizen_id: str
     conducted_at: datetime
+    status: str = "COMPLETED"                 # COMPLETED | INCOMPLETE | FLAGGED_FOR_REVIEW
+    questionnaire_version: str = "1.2.0"
+    missing_fields: List[str] = []
     structured_observations_count: int
     structured_observations: List[Observation]
-    explainable_summary: ExplainableScreeningSummary
+    explainable_summary: Optional[ExplainableScreeningSummary] = None
     risk_assessment: Optional[RiskAssessment] = None
+

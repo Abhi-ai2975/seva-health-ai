@@ -27,7 +27,70 @@ from packages.auth.jwt import TokenPayload, get_current_user_token
 from packages.types.enums import UserRole
 from services.store import store
 
+from services.wearable.adapter import wearable_adapter
+
 router = APIRouter(prefix="/privacy", tags=["Citizen Privacy Center"])
+
+
+CONSENT_NOTICES: Dict[str, Dict[str, Any]] = {
+    "SYS-CON-001": {
+        "notice_id": "SYS-CON-001-NOTICE-V1",
+        "requirement_id": "SYS-CON-001",
+        "category": "health_screening",
+        "version": "v1.2.0",
+        "title": "SevaHealth AI Clinical & Health Screening Consent Notice",
+        "purpose_description": "Collection and evaluation of vital signs, physiological measurements, lifestyle metrics, and screening questionnaires for non-diagnostic cardiovascular and metabolic risk stratification.",
+        "data_scope_disclosed": ["vitals", "screening_answers", "lifestyle", "risk_scores"],
+        "retention_policy": "Retained for longitudinal clinical trends during active care context; subject to immediate right-to-be-forgotten upon citizen request.",
+        "revocation_rights": "Citizen retains the unilateral right to revoke or modify consent at any time via the Citizen Privacy Center without affecting emergency triage.",
+        "non_diagnostic_disclaimer": "SevaHealth AI provides decision support indicators and does not constitute a confirmed medical diagnosis or autonomous medication prescription.",
+        "effective_date": "2026-01-01T00:00:00Z",
+    },
+    "SYS-CON-002": {
+        "notice_id": "SYS-CON-002-WEARABLE-V1",
+        "requirement_id": "SYS-CON-002",
+        "category": "wearable_data",
+        "version": "v1.1.0",
+        "title": "Continuous Wearable Sensor Telemetry Ingestion Notice",
+        "purpose_description": "Automated synchronization of resting heart rate, heart rate variability (HRV), step counts, and sleep stages from connected smartwatches and biometric wearables.",
+        "data_scope_disclosed": ["activity", "heartrate", "sleep", "respiratory"],
+        "retention_policy": "Rolling 14-day observation window retained for baseline analysis; future synchronization is blocked immediately upon revocation.",
+        "revocation_rights": "Citizen may disconnect providers or revoke data access at any time with one click in the Citizen Privacy Center.",
+        "non_diagnostic_disclaimer": "Consumer-grade wearable telemetry is not clinically equivalent to 12-lead ECG or diagnostic polysomnography.",
+        "effective_date": "2026-01-01T00:00:00Z",
+    },
+    "SYS-CON-003": {
+        "notice_id": "SYS-CON-003-RESEARCH-V1",
+        "requirement_id": "SYS-CON-003",
+        "category": "research_analytics",
+        "version": "v1.0.0",
+        "title": "Secondary Health Research & Population Analytics Notice",
+        "purpose_description": "De-identified and aggregated health data processing for epidemiological population studies and non-commercial clinical protocol optimization.",
+        "data_scope_disclosed": ["deidentified_vitals", "aggregated_risk_tiers", "demographics_k_anonymity"],
+        "retention_policy": "Anonymized research cohorts preserved according to institutional review board standards.",
+        "revocation_rights": "Opt-out available prior to dataset de-identification irreversibility threshold.",
+        "non_diagnostic_disclaimer": "Research analytics are exclusively non-interventional.",
+        "effective_date": "2026-01-01T00:00:00Z",
+    },
+}
+
+
+@router.get("/notices")
+async def list_consent_notices() -> List[Dict[str, Any]]:
+    """Presents all applicable ABDM and DISHA consent notices (SYS-CON-001)."""
+    return list(CONSENT_NOTICES.values())
+
+
+@router.get("/notices/{notice_key}")
+async def get_consent_notice(notice_key: str) -> Dict[str, Any]:
+    """Presents specific consent notice by requirement key (SYS-CON-001) or category."""
+    key_norm = notice_key.upper()
+    if key_norm in CONSENT_NOTICES:
+        return CONSENT_NOTICES[key_norm]
+    for n in CONSENT_NOTICES.values():
+        if n["category"].lower() == notice_key.lower():
+            return n
+    return CONSENT_NOTICES["SYS-CON-001"]
 
 
 class GrantConsentRequest(BaseModel):
@@ -41,6 +104,7 @@ class GrantConsentRequest(BaseModel):
     recipient: str = Field(default="PRIMARY_CARE_TEAM", description="Recipient entity, role, or service")
     expires_at: Optional[str] = Field(None, description="ISO-8601 expiration timestamp")
     version: str = Field(default="v1.0.0", description="Policy version")
+    notice_id: Optional[str] = Field(default="SYS-CON-001-NOTICE-V1", description="Referenced consent notice presented")
 
 
 class ModifyConsentRequest(BaseModel):
@@ -53,9 +117,43 @@ class RevokeConsentRequest(BaseModel):
     reason: str = Field(default="Revoked by citizen request", description="Reason for consent revocation")
 
 
+class VerifyAccessRequest(BaseModel):
+    subject: str = Field(description="Citizen ID subject")
+    category: ConsentCategory = Field(default=ConsentCategory.HEALTH_SCREENING, description="Consent category")
+    requested_purpose: str = Field(default="HEALTH_SCREENING", description="Requested processing purpose")
+    recipient: Optional[str] = Field(None, description="Requesting recipient")
+    required_scope: Optional[str] = Field(None, description="Required data scope")
+
+
+@router.post("/verify-access")
+async def verify_consent_access(
+    payload: VerifyAccessRequest,
+    actor: TokenPayload = Depends(get_current_user_token),
+) -> Dict[str, Any]:
+    """Inspects authorization result and denies processing outside granted purpose/scope (TC-CON-003)."""
+    allowed, reason = consent_manager.verify_consent(
+        subject=payload.subject,
+        category=payload.category,
+        purpose=payload.requested_purpose,
+        recipient=payload.recipient,
+        required_scope=payload.required_scope,
+        actor_id=actor.sub,
+        actor_role=actor.role.value if hasattr(actor.role, "value") else str(actor.role),
+    )
+    return {
+        "allowed": allowed,
+        "decision": "PERMITTED" if allowed else "DENIED",
+        "reason": reason,
+        "subject": payload.subject,
+        "category": payload.category.value,
+        "requested_purpose": payload.requested_purpose,
+        "required_scope": payload.required_scope,
+    }
+
+
 def _resolve_subject(token: TokenPayload, requested_subject: Optional[str] = None) -> str:
     """Resolves subject ensuring citizens can only manage their own consents."""
-    if requested_subject and token.role in [UserRole.SYSTEM_ADMIN, UserRole.CLINICIAN]:
+    if requested_subject and token.role in [UserRole.SYSTEM_ADMIN, UserRole.CLINICIAN, UserRole.HEALTH_WORKER]:
         return requested_subject
     if token.role == UserRole.CITIZEN:
         # Check citizen record mapping
@@ -80,6 +178,7 @@ async def grant_consent(
         recipient=payload.recipient,
         expires_at=payload.expires_at,
         version=payload.version,
+        notice_id=payload.notice_id,
         actor_id=actor.sub,
         actor_role=actor.role.value,
     )
@@ -222,6 +321,9 @@ async def revoke_wearable_access(
         store.revoke_consent(subject_id, wc.id)
         revoked_count += 1
 
+    # Synchronize with wearable adapter
+    await wearable_adapter.revoke_consent(subject_id)
+
     return {
         "status": "SUCCESS",
         "subject": subject_id,
@@ -229,6 +331,7 @@ async def revoke_wearable_access(
         "revoked_directives_count": revoked_count,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "message": "Continuous wearable sync halted. No future sensor readings will be ingested without renewed consent.",
+        "retention_policy": "RETAINED_FOR_AUDIT_TRAIL",
     }
 
 

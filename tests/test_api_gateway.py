@@ -40,7 +40,16 @@ def test_get_citizen():
 
 
 def test_risk_evaluation():
-    response = client.post("/api/v1/risk/evaluate/citizen-ramesh-patel-01")
+    # Login as clinician
+    auth_res = client.post(
+        "/api/v1/auth/token",
+        json={"email": "doctor@sevahealth.ai", "password": "password123"}
+    )
+    token = auth_res.json()["access_token"]
+    response = client.post(
+        "/api/v1/risk/evaluate/citizen-ramesh-patel-01",
+        headers={"Authorization": f"Bearer {token}"}
+    )
     assert response.status_code == 200
     data = response.json()
     assert data["overall_tier"] in ["HIGH", "CRITICAL"]
@@ -83,7 +92,12 @@ def test_outcome_delta():
 
 
 def test_risk_models_catalog():
-    response = client.get("/api/v1/risk/models")
+    auth_res = client.post(
+        "/api/v1/auth/token",
+        json={"email": "doctor@sevahealth.ai", "password": "password123"}
+    )
+    token = auth_res.json()["access_token"]
+    response = client.get("/api/v1/risk/models", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 5

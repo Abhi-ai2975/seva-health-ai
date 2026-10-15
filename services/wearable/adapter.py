@@ -19,6 +19,20 @@ from services.wearable.projections import calculate_wearable_projections
 
 logger = structlog.get_logger(__name__)
 
+WEARABLE_METRIC_OBSERVATION_MAP: Dict[WearableMetricType, Tuple[str, str, str]] = {
+    WearableMetricType.HEART_RATE: ("HEART_RATE", "8867-4", "Heart rate"),
+    WearableMetricType.STEPS: ("STEPS", "55423-8", "Daily Step Count"),
+    WearableMetricType.HRV: ("HRV", "80404-7", "Heart rate variability (RMSSD)"),
+    WearableMetricType.SLEEP: ("SLEEP_DURATION", "93832-4", "Sleep duration"),
+    WearableMetricType.WEIGHT: ("WEIGHT", "29463-7", "Body weight"),
+    WearableMetricType.CALORIES: ("CALORIES_BURNED", "41981-2", "Active calories burned"),
+    WearableMetricType.WORKOUTS: ("WORKOUT_SESSIONS", "55411-3", "Exercise sessions"),
+    WearableMetricType.BLOOD_PRESSURE: ("SYSTOLIC_BP", "8480-6", "Systolic blood pressure"),
+    WearableMetricType.GLUCOSE: ("FASTING_GLUCOSE", "1558-6", "Continuous glucose reading"),
+    WearableMetricType.SPO2: ("SPO2", "59408-5", "Oxygen saturation in blood"),
+    WearableMetricType.RESPIRATORY_RATE: ("RESPIRATORY_RATE", "9279-1", "Respiratory rate"),
+}
+
 
 # ==============================================================================
 # 1. ABSTRACT WEARABLE ADAPTER INTERFACE
@@ -330,6 +344,13 @@ class OpenWearablesAdapter(WearableAdapter):
         """Performs full sync with exponential retry backoff for transient network issues."""
         target_provider = provider or WearableProvider.GARMIN
 
+        # Check if consent has been revoked on connection
+        if citizen_id in self.connections and target_provider.value in self.connections[citizen_id]:
+            conn = self.connections[citizen_id][target_provider.value]
+            if conn.status == "REVOKED" or conn.consent_revoked_at is not None:
+                logger.warning("wearable_sync_blocked_revoked", citizen_id=citizen_id)
+                raise PermissionError(f"Wearable synchronization blocked: Access for citizen '{citizen_id}' has been revoked.")
+
         # Execute with retry logic
         records = await self._execute_with_retry(
             lambda: MockWearableProvider.generate_records(
@@ -342,7 +363,9 @@ class OpenWearablesAdapter(WearableAdapter):
 
         if citizen_id not in self.raw_records:
             self.raw_records[citizen_id] = []
-        self.raw_records[citizen_id].extend(records)
+        existing_ids = {r.id for r in self.raw_records[citizen_id]}
+        unique_records = [r for r in records if r.id not in existing_ids]
+        self.raw_records[citizen_id].extend(unique_records)
 
         # Update connection state
         if citizen_id in self.connections and target_provider.value in self.connections[citizen_id]:
@@ -354,6 +377,9 @@ class OpenWearablesAdapter(WearableAdapter):
         proj = calculate_wearable_projections(citizen_id, self.raw_records[citizen_id])
         self.projections[citizen_id] = proj
 
+        # Persist normalized observations to central store (TC-INT-004)
+        self._persist_records_to_clinical_store(citizen_id, records)
+
         logger.info("wearable_full_sync_completed", citizen_id=citizen_id, records_count=len(records))
         return records
 
@@ -361,6 +387,12 @@ class OpenWearablesAdapter(WearableAdapter):
         self, citizen_id: str, cursor: Optional[str] = None
     ) -> Tuple[List[NormalizedWearableRecord], str]:
         """Performs incremental sync retrieving only newly captured records since cursor."""
+        if citizen_id in self.connections:
+            for conn in self.connections[citizen_id].values():
+                if conn.status == "REVOKED" or conn.consent_revoked_at is not None:
+                    logger.warning("wearable_sync_blocked_revoked", citizen_id=citizen_id)
+                    raise PermissionError(f"Wearable synchronization blocked: Access for citizen '{citizen_id}' has been revoked.")
+
         now = datetime.now(timezone.utc)
         since_time = now - timedelta(days=2)
         if cursor:
@@ -379,7 +411,9 @@ class OpenWearablesAdapter(WearableAdapter):
 
         if citizen_id not in self.raw_records:
             self.raw_records[citizen_id] = []
-        self.raw_records[citizen_id].extend(delta)
+        existing_ids = {r.id for r in self.raw_records[citizen_id]}
+        unique_delta = [r for r in delta if r.id not in existing_ids]
+        self.raw_records[citizen_id].extend(unique_delta)
 
         # Update cursor
         new_cursor = str(int(now.timestamp()))
@@ -390,6 +424,10 @@ class OpenWearablesAdapter(WearableAdapter):
 
         # Update projection
         self.projections[citizen_id] = calculate_wearable_projections(citizen_id, self.raw_records[citizen_id])
+
+        # Persist normalized delta observations to central store (TC-INT-004)
+        self._persist_records_to_clinical_store(citizen_id, delta)
+
         return delta, new_cursor
 
     async def handle_webhook(self, payload: WebhookPayload) -> Dict[str, Any]:
@@ -455,21 +493,64 @@ class OpenWearablesAdapter(WearableAdapter):
         if citizen_id in self.connections:
             for conn in self.connections[citizen_id].values():
                 conn.status = "REVOKED"
+        from services.store import store
+        if citizen_id in store.observations:
+            store.observations[citizen_id] = [
+                o for o in store.observations[citizen_id]
+                if not (o.source and "WEARABLE" in o.source.upper())
+            ]
         logger.info("wearable_data_purged", citizen_id=citizen_id, count=deleted_records)
         return True
+
+    def _persist_records_to_clinical_store(self, citizen_id: str, records: List[NormalizedWearableRecord]):
+        """Persists normalized wearable telemetry into citizen Observation repository (TC-INT-004)."""
+        from services.store import store
+        from packages.clinical_models.observations import Observation
+
+        for rec in records:
+            if rec.metric in WEARABLE_METRIC_OBSERVATION_MAP:
+                code_name, loinc, display = WEARABLE_METRIC_OBSERVATION_MAP[rec.metric]
+                obs = Observation(
+                    citizen_id=citizen_id,
+                    code=code_name,
+                    value=rec.value,
+                    unit=rec.unit,
+                    recorded_at=rec.timestamp,
+                    source=rec.source or "OPEN_WEARABLES_CONNECTOR",
+                    source_event_id=rec.id,
+                    provenance={
+                        "provider": rec.provider.value,
+                        "device_brand": rec.provenance.device_brand,
+                        "device_model": rec.provenance.device_model,
+                        "sync_protocol": rec.provenance.sync_protocol,
+                        "confidence": rec.confidence,
+                        "is_medical_grade": rec.is_medical_grade,
+                    },
+                    loinc_code=loinc,
+                    display_name=display,
+                )
+                store.add_observation(obs)
 
     def get_projection(self, citizen_id: str) -> Optional[WearableProjection]:
         return self.projections.get(citizen_id)
 
     async def _execute_with_retry(self, operation):
         """Exponential backoff retry helper for transient network calls."""
+        last_error = None
         for attempt in range(1, self.max_retries + 1):
             try:
-                return operation()
+                if asyncio.iscoroutinefunction(operation):
+                    return await operation()
+                res = operation()
+                if asyncio.iscoroutine(res):
+                    return await res
+                return res
             except Exception as e:
+                last_error = e
                 if attempt == self.max_retries:
                     raise e
-                await asyncio.sleep(0.05 * (2 ** attempt))
+                await asyncio.sleep(0.01 * (2 ** attempt))
+        raise last_error
 
 
 # Singleton adapter instance

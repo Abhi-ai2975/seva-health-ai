@@ -62,6 +62,18 @@ class PrivacyProtectionEngine:
         }
 
     @classmethod
+    def sanitize_cell_map(
+        cls,
+        breakdown_dict: Dict[str, int],
+        threshold: int = MIN_CELL_SIZE_THRESHOLD,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Returns detailed cell suppression records for every dimension category."""
+        return {
+            key: cls.enforce_cell_suppression(val, threshold)
+            for key, val in breakdown_dict.items()
+        }
+
+    @classmethod
     def generate_pseudonym(cls, identifier: str) -> str:
         """Generates deterministic, irreversible salted cryptographic pseudonym."""
         hasher = hashlib.sha256()

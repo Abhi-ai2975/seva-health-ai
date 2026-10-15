@@ -108,21 +108,30 @@ class FederatedClinicalDataProvider:
 
         if not p:
             # Try bezs-emr-gql
-            p = await self.emr_gql_adapter.get_patient(patient_id, context)
-            if p:
-                found_source = self.emr_gql_adapter.source_system.value
+            try:
+                p = await self.emr_gql_adapter.get_patient(patient_id, context)
+                if p:
+                    found_source = self.emr_gql_adapter.source_system.value
+            except Exception as e:
+                logger.warning("emr_gql_patient_lookup_failed", error=str(e), patient_id=patient_id)
 
         if not p:
             # Try bezs-hms
-            p = await self.hms_adapter.get_patient(patient_id, context)
-            if p:
-                found_source = self.hms_adapter.source_system.value
+            try:
+                p = await self.hms_adapter.get_patient(patient_id, context)
+                if p:
+                    found_source = self.hms_adapter.source_system.value
+            except Exception as e:
+                logger.warning("hms_patient_lookup_failed", error=str(e), patient_id=patient_id)
 
         if not p:
             # Fallback openehr
-            p = await self.openehr_adapter.get_patient(patient_id, context)
-            if p:
-                found_source = self.openehr_adapter.source_system.value
+            try:
+                p = await self.openehr_adapter.get_patient(patient_id, context)
+                if p:
+                    found_source = self.openehr_adapter.source_system.value
+            except Exception as e:
+                logger.warning("openehr_patient_lookup_failed", error=str(e), patient_id=patient_id)
 
         ClinicalAccessAuditLogger.log_access(
             context=context,
@@ -351,12 +360,18 @@ class FederatedClinicalDataProvider:
             return_exceptions=True,
         )
 
+        adapters_status = [
+            res if isinstance(res, dict) else {"error": str(res), "status": "ERROR"}
+            for res in checks
+        ]
+        has_offline = any(
+            isinstance(a, dict) and a.get("status") in ["OFFLINE", "ERROR"]
+            for a in adapters_status
+        )
+
         return {
-            "status": "HEALTHY",
-            "adapters": [
-                res if isinstance(res, dict) else {"error": str(res)}
-                for res in checks
-            ],
+            "status": "DEGRADED" if has_offline else "HEALTHY",
+            "adapters": adapters_status,
             "security": {
                 "rbac_enforcement": "ACTIVE",
                 "anti_arbitrary_query_guard": "ACTIVE",

@@ -130,4 +130,16 @@ def run_demo_pipeline():
 
 
 if __name__ == "__main__":
+    if "--reset" in sys.argv:
+        print_banner()
+        print(f"{Colors.BOLD}{Colors.YELLOW}[RESET] Triggering SevaHealth Demo Reset Button...{Colors.RESET}")
+        from services.demo.challenge_workflow import reset_challenge_demo
+        res = reset_challenge_demo()
+        print(f"  {Colors.GREEN}[OK] {res['message']}{Colors.RESET}")
+        print(f"  Citizen Subject: {res['citizen_id']}")
+        print(f"  Reset Timestamp: {res['reset_at']}")
+        print(f"  Baseline: Restored to Step 0.")
+        print(f"{Colors.GREEN}{Colors.BOLD}DEMO ENVIRONMENT RESET COMPLETED.{Colors.RESET}")
+        print("=" * 80)
+        sys.exit(0)
     run_demo_pipeline()

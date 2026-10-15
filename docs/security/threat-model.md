@@ -11,7 +11,8 @@
 
 **SevaHealth AI** is a preventive healthcare and early-warning platform deployed across primary health centres (PHCs), mobile health camps, corporate wellness hubs, and citizen smartphones. 
 
-Because the platform processes Protected Health Information (PHI) including biometric vitals, longitudinal risk trajectories, laboratory reports, and identity markers (such as Ayushman Bharat Health Account / ABHA IDs), **the cost of a security breach is catastrophic**:
+Because the platform processes Protected Health Information (PHI) including biometric vitals, longitudinal risk trajectories, laboratory reports, and identity markers (such as Ayushman Bharat Health Account / ABHA IDs), **the cost of a security breach is catast
+rophic**:
 1. **Patient Harm:** Falsified risk calculations, suppressed emergency clinical escalations, or unauthorized medication claims could directly endanger human life.
 2. **Privacy Violations:** Leakage of chronic condition risk scores (e.g. diabetes, cardiovascular disease) could lead to employment or insurance discrimination.
 3. **Loss of Public Trust:** Compromising community health workers (ASHAs) or PHC infrastructure destroys civic participation in preventive screening programs.
@@ -158,14 +159,28 @@ flowchart TD
   - Parameterized ORM queries via SQLAlchemy and Pydantic models.
   - `AntiArbitraryQueryGuard.inspect_query_parameter()` inspects query parameters with regex patterns for SQL injection (`UNION SELECT`, `DROP TABLE`, `OR 1=1`, stacked queries) and blocks them before hitting storage.
 
-### 7. Cross-Site Scripting (XSS)
-* **Threat:** Stored XSS where an attacker submits malicious `<script>` tags in symptom notes or citizen names that execute in the clinician portal.
+### 7. Cross-Site Scripting (XSS) & Safe Dashboard Rendering (TC-SEC-002)
+* **Threat:** Stored or reflected XSS where an adversary submits synthetic script payloads (e.g. `<script>alert(1)</script>`, `<img src=x onerror=fetch(...)>`, `<svg onload=...>`, `javascript:...`) in permitted free-text fields (citizen profile registration, clinical triage notes, screening observations, escalation instructions) designed to execute in clinician or public health dashboards.
 * **STRIDE Category:** Tampering / Information Disclosure
-* **Impact:** High (Session token theft, clinician browser compromise).
+* **Impact:** Critical / High (Session token theft, administrative impersonation, PHI exfiltration, clinician browser hijacking).
 * **Mitigations in Code:**
-  - `InputSanitizer.sanitize_text()` strips executable tags (`<script>`, `<iframe>`, `javascript:`, `onload=`) and escapes HTML entities.
-  - Content Security Policy (CSP) header `default-src 'self'; script-src 'self' 'unsafe-inline'` prevents unauthorized remote scripts.
-  - `X-XSS-Protection: 1; mode=block` enabled on all responses.
+  - **Triple-Layer Defense Architecture:**
+    1. **Ingestion-Time Neutralization (`packages/security/xss_guard.py`):**
+       - `XSSDetector` scans for known malicious patterns across 5 vector categories: raw script tags, inline DOM event handlers (`onload=`, `onerror=`), pseudo-protocols (`javascript:`, `vbscript:`, `data:`), embedded resource elements (`<iframe>`, `<object>`, `<embed>`), and SVG/XML vectors.
+       - `XSSSanitizer` neutralizes dangerous executable constructs and enforces strict HTML entity encoding (`html.escape(..., quote=True)`), converting `<` and `>` to `&lt;` and `&gt;`.
+       - Clinical semantic integrity preservation ensures legitimate mathematical and medical comparisons (e.g., `fasting glucose > 126 mg/dL`, `SpO2 < 92%`) remain legible without loss of clinical meaning.
+       - Ingestion endpoints protected:
+         - Citizen profile (`first_name`, `last_name`, `village_or_ward` in `services/identity/router.py`)
+         - Clinical review (`review_notes`, `escalation_reason`, `updated_care_plan_instructions` in `services/clinical/router.py`)
+         - Screening records (`notes` in `services/screening/router.py`)
+    2. **HTTP Header Enforcement (`SecureHeadersMiddleware`):**
+       - `Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; object-src 'none'; base-uri 'self'` restricts executable origin context and completely blocks plugin objects.
+       - `X-XSS-Protection: 1; mode=block` activates legacy browser XSS filters.
+       - `X-Content-Type-Options: nosniff` stops MIME-type confusion attacks.
+    3. **Client-Side Safe DOM Binding:**
+       - Clinician Copilot (`apps/clinician-web/copilot_dashboard.html`), Public Health Portal (`apps/public-health-web/index.html`), and Central Dashboard (`services/api/static/index.html`) bind untrusted strings using `textContent` property assignments or `escapeHtml()` template escapes, preventing the browser HTML parser from tokenizing payload text into executable script nodes.
+    4. **Telemetry & Auditing:**
+       - Real-time audit recording of detected payloads via `POST /api/v1/security/xss-test` and forensic inspection via `GET /api/v1/security/xss-audit`.
 
 ### 8. Cross-Site Request Forgery (CSRF)
 * **Threat:** Malicious web pages tricking a clinician's browser into submitting unauthorized care plans.
@@ -296,6 +311,7 @@ flowchart TD
 | **TH-05** | Credential brute-forcing on auth API | Spoofing | 7 | 6 | 6 | 6 | 7 | **6.4** | :orange_circle: Medium |
 | **TH-06** | PHI biomarker leakage into application logs | Info Disclosure | 6 | 8 | 3 | 8 | 8 | **6.6** | :orange_circle: Medium |
 | **TH-07** | Session token replay after logout | Spoofing | 7 | 7 | 4 | 7 | 7 | **6.4** | :orange_circle: Medium |
+| **TH-08** | Stored XSS via clinical notes or citizen profile (TC-SEC-002) | Tampering / Info Disclosure | 8 | 8 | 3 | 8 | 8 | **7.0** | :red_circle: High |
 
 ---
 
@@ -307,6 +323,7 @@ All 20 security controls are backed by automated regression tests in the reposit
 - [`tests/test_consent_and_privacy.py`](file:///d:/seva-health-ai/tests/test_consent_and_privacy.py): ABDM 8-category consent lifecycle, revocable wearable sync.
 - [`tests/test_observability.py`](file:///d:/seva-health-ai/tests/test_observability.py): Healthcare data log scrubbing, correlation ID propagation.
 - [`tests/test_security_hardening.py`](file:///d:/seva-health-ai/tests/test_security_hardening.py): Secure headers, rate limiting, XSS input sanitization, SSRF IP blocking, file validation, AES-256 field encryption.
+- [`tests/test_tc_sec_002.py`](file:///d:/seva-health-ai/tests/test_tc_sec_002.py): Comprehensive P0 verification of TC-SEC-002 (XSS signature detection, ingestion route sanitization, CSP headers, clinical text preservation, and safe DOM rendering invariant).
 
 ---
 

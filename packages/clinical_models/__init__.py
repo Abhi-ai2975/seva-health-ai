@@ -7,7 +7,12 @@ from packages.clinical_models.risk import (
     RiskDriver,
     ProtectiveFactor,
 )
-from packages.clinical_models.care_plan import CarePlan, DailyTask
+from packages.clinical_models.care_plan import (
+    CarePlan,
+    DailyTask,
+    PlanModificationRecord,
+    CitizenCheckIn,
+)
 from packages.clinical_models.triage import ClinicalTriageCase, SOAPReport
 from packages.clinical_models.fhir import (
     export_patient_fhir_r4,
@@ -21,6 +26,23 @@ from packages.clinical_models.consent import (
     HealthcareConsent,
     ConsentManager,
     consent_manager,
+)
+from packages.clinical_models.referral import (
+    Referral as ClinicalReferral,
+    ReferralTransitionRecord,
+    PERMITTED_REFERRAL_TRANSITIONS,
+    ReferralCreatePayload,
+    ReferralAssignPayload,
+    ReferralTransitionPayload,
+    ReferralClosePayload,
+)
+from packages.clinical_models.notification import (
+    ClinicalNotification,
+    NotificationDeliveryAttempt,
+    TriggerNotificationPayload,
+    RetryNotificationPayload,
+    EscalationEventPayload,
+    EscalationEventResponse,
 )
 
 from packages.clinical_models.domain_models import (

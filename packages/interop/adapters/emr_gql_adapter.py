@@ -11,6 +11,7 @@ All interactions use parameterized, typed, predetermined query operations.
 
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
+import asyncio
 import structlog
 
 from packages.config.settings import settings
@@ -43,10 +44,41 @@ class EmrGqlAdapter(ClinicalDataProvider):
         self.endpoint_url = endpoint_url or settings.EMR_GQL_URL
         # In-memory storage for FHIR R4 test/cached resources in standalone mode
         self._fhir_store: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+        self.is_enabled: bool = True
+        self.max_retries: int = 3
 
     @property
     def source_system(self) -> ClinicalSourceSystem:
         return ClinicalSourceSystem.BEZS_EMR_GQL
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Enables or disables external EMR endpoint communication (TC-INT-007)."""
+        self.is_enabled = enabled
+
+    def _check_endpoint_health(self) -> None:
+        if not self.is_enabled:
+            raise ConnectionError(
+                f"External EMR endpoint '{self.endpoint_url}' failure: endpoint unreachable or disabled (TC-INT-007)."
+            )
+
+    async def _execute_with_retry(self, operation):
+        """Executes operation with retry policy to recover from transient failures."""
+        last_error = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                self._check_endpoint_health()
+                if asyncio.iscoroutinefunction(operation):
+                    return await operation()
+                res = operation()
+                if asyncio.iscoroutine(res):
+                    return await res
+                return res
+            except Exception as e:
+                last_error = e
+                if attempt == self.max_retries:
+                    raise e
+                await asyncio.sleep(0.02 * (2 ** attempt))
+        raise last_error or ConnectionError("External EMR operation failed after maximum retries.")
 
     def seed_fhir_resource(self, patient_id: str, resource_type: str, resource: Dict[str, Any]) -> None:
         """Seed a FHIR R4 resource for testing/offline operation."""
@@ -63,6 +95,7 @@ class EmrGqlAdapter(ClinicalDataProvider):
 
     async def get_patient(self, patient_id: str, context: AccessContext) -> Optional[NormalizedPatient]:
         AntiArbitraryQueryGuard.validate_request_parameters(patient_id=patient_id)
+        self._check_endpoint_health()
 
         # Retrieve FHIR Patient resource
         p_list = self._fhir_store.get(patient_id, {}).get("Patient", [])
@@ -105,6 +138,7 @@ class EmrGqlAdapter(ClinicalDataProvider):
         category: Optional[ObservationCategory] = None,
     ) -> List[NormalizedObservation]:
         AntiArbitraryQueryGuard.validate_request_parameters(patient_id=patient_id)
+        self._check_endpoint_health()
 
         obs_list = self._fhir_store.get(patient_id, {}).get("Observation", [])
         normalized: List[NormalizedObservation] = []
@@ -167,6 +201,7 @@ class EmrGqlAdapter(ClinicalDataProvider):
 
     async def get_conditions(self, patient_id: str, context: AccessContext) -> List[NormalizedCondition]:
         AntiArbitraryQueryGuard.validate_request_parameters(patient_id=patient_id)
+        self._check_endpoint_health()
 
         cond_list = self._fhir_store.get(patient_id, {}).get("Condition", [])
         normalized: List[NormalizedCondition] = []
@@ -205,6 +240,7 @@ class EmrGqlAdapter(ClinicalDataProvider):
 
     async def get_medications(self, patient_id: str, context: AccessContext) -> List[NormalizedMedication]:
         AntiArbitraryQueryGuard.validate_request_parameters(patient_id=patient_id)
+        self._check_endpoint_health()
 
         med_list = self._fhir_store.get(patient_id, {}).get("MedicationRequest", [])
         normalized: List[NormalizedMedication] = []
@@ -241,6 +277,7 @@ class EmrGqlAdapter(ClinicalDataProvider):
 
     async def get_encounters(self, patient_id: str, context: AccessContext) -> List[NormalizedEncounter]:
         AntiArbitraryQueryGuard.validate_request_parameters(patient_id=patient_id)
+        self._check_endpoint_health()
 
         enc_list = self._fhir_store.get(patient_id, {}).get("Encounter", [])
         normalized: List[NormalizedEncounter] = []
@@ -268,6 +305,7 @@ class EmrGqlAdapter(ClinicalDataProvider):
 
     async def get_care_plans(self, patient_id: str, context: AccessContext) -> List[NormalizedCarePlan]:
         AntiArbitraryQueryGuard.validate_request_parameters(patient_id=patient_id)
+        self._check_endpoint_health()
         # FHIR R4 CarePlan mapping
         return []
 
@@ -275,6 +313,7 @@ class EmrGqlAdapter(ClinicalDataProvider):
         self, patient_id: str, context: AccessContext
     ) -> List[NormalizedClinicalDocument]:
         AntiArbitraryQueryGuard.validate_request_parameters(patient_id=patient_id)
+        self._check_endpoint_health()
 
         doc_list = self._fhir_store.get(patient_id, {}).get("DocumentReference", [])
         normalized: List[NormalizedClinicalDocument] = []
@@ -297,6 +336,14 @@ class EmrGqlAdapter(ClinicalDataProvider):
         return normalized
 
     async def health_check(self) -> Dict[str, Any]:
+        if not self.is_enabled:
+            return {
+                "source_system": self.source_system.value,
+                "status": "OFFLINE",
+                "endpoint_url": self.endpoint_url,
+                "error": f"External EMR endpoint '{self.endpoint_url}' failure: endpoint unreachable or disabled (TC-INT-007).",
+                "arbitrary_graphql_queries_blocked": True,
+            }
         return {
             "source_system": self.source_system.value,
             "status": "ONLINE",

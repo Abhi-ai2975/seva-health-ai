@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 from packages.auth.jwt import get_current_user_token, TokenPayload
 from packages.ai_schemas.schemas import LLMRiskExplanationOutput, LLMSOAPSummaryOutput
-from services.ai_agent.provider import get_ai_provider
+from services.ai_agent.provider import get_ai_provider, AIServiceUnavailableError
 from services.ai_agent.safety import ClinicalSafetyEnforcer
 from services.ai_agent.tools import agent_telemetry
 from services.ai_agent.prevention_agent import (
@@ -39,12 +39,67 @@ async def explain_risk_with_ai(
     risk = store.get_latest_risk(citizen_id)
     score = risk.overall_score if risk else 0.50
 
-    provider = get_ai_provider()
-    output = await provider.explain_risk(
-        citizen_name=f"{citizen.first_name} {citizen.last_name}",
-        vitals_summary="Biometrics assessed against ICMR standards.",
-        risk_score=score,
-    )
+    # Retrieve grounded observation summary
+    obs_list = store.get_citizen_observations(citizen_id)
+    obs_dict = {o.code.lower(): o.value for o in obs_list}
+    if citizen.birth_date:
+        try:
+            b_year = int(citizen.birth_date.split("-")[0])
+            obs_dict["age"] = datetime.now().year - b_year
+        except Exception:
+            pass
+    if citizen.gender:
+        obs_dict["sex"] = getattr(citizen.gender, "value", str(citizen.gender)).lower()
+
+    top_drivers = []
+    protective_factors = []
+    if risk and risk.top_drivers:
+        top_drivers = [
+            f"{d.feature_name}: observed {d.observed_value} (target: {d.target_value})"
+            for d in risk.top_drivers
+        ]
+    if risk and risk.protective_factors:
+        protective_factors = [
+            f"{getattr(p, 'feature_name', None) or getattr(p, 'factor_name', 'Protective Factor')}: observed {p.observed_value}"
+            for p in risk.protective_factors
+        ]
+
+    # Data limitations audit
+    missing, conf, limitations = ClinicalSafetyEnforcer.check_missing_essential_information(obs_dict or {})
+
+    vitals_parts = []
+    if "systolic_bp" in obs_dict:
+        vitals_parts.append(f"Systolic BP {obs_dict['systolic_bp']:.0f} mmHg")
+    if "fasting_glucose" in obs_dict:
+        vitals_parts.append(f"Glucose {obs_dict['fasting_glucose']:.0f} mg/dL")
+    if "bmi" in obs_dict:
+        vitals_parts.append(f"BMI {obs_dict['bmi']:.1f} kg/m²")
+    vitals_summary = ", ".join(vitals_parts) if vitals_parts else "Biometrics assessed against ICMR standards."
+
+    try:
+        provider = get_ai_provider()
+        output = await provider.explain_risk(
+            citizen_name=f"{citizen.first_name} {citizen.last_name}",
+            vitals_summary=vitals_summary,
+            risk_score=score,
+            top_drivers=top_drivers or None,
+            protective_factors=protective_factors or None,
+            observations=obs_dict or None,
+            limitations=limitations or None,
+        )
+    except AIServiceUnavailableError:
+        output = LLMRiskExplanationOutput(
+            plain_summary=(
+                f"AI Explanation Service Offline (TC-AI-006): The automated AI explanation service is temporarily "
+                f"unavailable. However, the deterministic risk stratification for {citizen.first_name} {citizen.last_name} "
+                f"remains fully preserved with an overall risk score of {int(score * 100)}% ({vitals_summary}). "
+                f"This assessment was calculated deterministically by the validated clinical risk engine."
+            ),
+            key_drivers=top_drivers or ["Deterministic clinical parameters preserved in electronic health record"],
+            protective_strengths=protective_factors or ["Validated deterministic calculation active"],
+            recommended_focus_area="Consult primary care physician or review deterministic screening dashboard.",
+            safety_reminder="Clinical review recommended. Validated deterministic screening assessment.",
+        )
 
     # Enforce safety check
     is_safe, sanitized_summary = ClinicalSafetyEnforcer.audit_ai_response(output.plain_summary)
@@ -236,3 +291,53 @@ def get_agent_audit_logs(
         raise HTTPException(status_code=404, detail="Citizen not found")
     logs = agent_telemetry.get_logs_for_citizen(citizen_id)
     return {"citizen_id": citizen_id, "total_events": len(logs), "events": logs}
+
+
+class ToolInvocationPayload(BaseModel):
+    tool_name: str
+    citizen_id: str
+    arguments: Optional[Dict[str, Any]] = None
+
+
+@router.post("/prevention-agent/invoke-tool")
+def invoke_agent_tool_endpoint(
+    payload: ToolInvocationPayload,
+    current_user: TokenPayload = Depends(get_current_user_token),
+):
+    """Direct AI tool execution interface with independent authorization enforcement (TC-AI-005)."""
+    from services.ai_agent.tools import invoke_agent_tool
+    try:
+        res = invoke_agent_tool(
+            tool_name=payload.tool_name,
+            citizen_id=payload.citizen_id,
+            actor=current_user,
+            arguments=payload.arguments,
+        )
+        return {"status": "SUCCESS", "tool_name": payload.tool_name, "result": res}
+    except PermissionError as pe:
+        raise HTTPException(status_code=403, detail=str(pe))
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/provider/toggle")
+def toggle_ai_provider(
+    enabled: bool,
+    current_user: TokenPayload = Depends(get_current_user_token),
+):
+    """Toggles AI provider availability status for TC-AI-006 fault tolerance testing."""
+    from services.ai_agent.provider import set_ai_provider_enabled, is_ai_provider_enabled
+    set_ai_provider_enabled(enabled)
+    return {"status": "SUCCESS", "ai_provider_enabled": is_ai_provider_enabled()}
+
+
+@router.get("/provider/status")
+def get_ai_provider_status(
+    current_user: TokenPayload = Depends(get_current_user_token),
+):
+    """Retrieves current AI provider availability status."""
+    from services.ai_agent.provider import is_ai_provider_enabled
+    return {"ai_provider_enabled": is_ai_provider_enabled()}
+

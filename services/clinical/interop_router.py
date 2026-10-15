@@ -33,6 +33,9 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/interop", tags=["Clinical Interoperability & EMR Federation"])
 
+from services.clinical.interop_test_router import test_router
+router.include_router(test_router, prefix="/test", tags=["Section 14 Test Cases: Integration & Wearables"])
+
 
 def _extract_access_context(
     request: Request,

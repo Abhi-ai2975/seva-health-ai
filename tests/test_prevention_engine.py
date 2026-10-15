@@ -13,6 +13,8 @@ from services.intervention_engine.models import (
 from services.intervention_engine.engine import PreventionInterventionEngine
 from services.intervention_engine.rules import rule_registry, InterventionRule
 from services.intervention_engine.templates import PREVENTION_TEMPLATES
+from packages.types.enums import UserRole
+from packages.auth.jwt import create_access_token
 
 client = TestClient(app)
 
@@ -20,6 +22,13 @@ client = TestClient(app)
 @pytest.fixture(scope="module", autouse=True)
 def setup_seed():
     seed_all_demo_data()
+
+
+@pytest.fixture
+def auth_headers():
+    token = create_access_token("doctor-01", "karnataka_state_health", UserRole.CLINICIAN)
+    return {"Authorization": f"Bearer {token}"}
+
 
 
 # =========================================================================
@@ -223,16 +232,16 @@ def test_configurable_rules_registry():
 # 2. API GATEWAY INTEGRATION TESTS
 # =========================================================================
 
-def test_api_list_templates():
-    response = client.get("/api/v1/intervention/templates")
+def test_api_list_templates(auth_headers):
+    response = client.get("/api/v1/intervention/templates", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert len(data) >= 5
     assert any(t["template_id"] == "prediabetes_reversal" for t in data)
 
 
-def test_api_list_rules():
-    response = client.get("/api/v1/intervention/rules")
+def test_api_list_rules(auth_headers):
+    response = client.get("/api/v1/intervention/rules", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert len(data) >= 10
@@ -242,8 +251,8 @@ def test_api_list_rules():
     assert "smoking_cessation" in categories
 
 
-def test_api_generate_comprehensive_plan_ramesh_patel():
-    response = client.post("/api/v1/intervention/generate-comprehensive/citizen-ramesh-patel-01")
+def test_api_generate_comprehensive_plan_ramesh_patel(auth_headers):
+    response = client.post("/api/v1/intervention/generate-comprehensive/citizen-ramesh-patel-01", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
 
@@ -259,17 +268,18 @@ def test_api_generate_comprehensive_plan_ramesh_patel():
     assert data["clinician_workflow_required"] is True
 
 
-def test_api_get_comprehensive_plan():
-    response = client.get("/api/v1/intervention/comprehensive/citizen-ramesh-patel-01")
+def test_api_get_comprehensive_plan(auth_headers):
+    response = client.get("/api/v1/intervention/comprehensive/citizen-ramesh-patel-01", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert data["citizen_id"] == "citizen-ramesh-patel-01"
     assert len(data["daily_tasks"]) == 30
 
 
-def test_api_backward_compatible_plan_endpoints():
-    response = client.get("/api/v1/intervention/plan/citizen-ramesh-patel-01")
+def test_api_backward_compatible_plan_endpoints(auth_headers):
+    response = client.get("/api/v1/intervention/plan/citizen-ramesh-patel-01", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert len(data["daily_tasks"]) == 30
     assert "adherence_percentage" in data
+

@@ -75,6 +75,9 @@ class DiabetesRiskModel(RiskModel):
         # Check for glycemic data availability
         has_glycemic_data = any(k in clean_inputs for k in ["HBA1C", "FASTING_GLUCOSE", "IDRS_SCORE"])
         if missing_mandatory or not has_glycemic_data:
+            missing_reqs = list(missing_mandatory)
+            if not has_glycemic_data:
+                missing_reqs.append("Glycemic Biomarker (HBA1C, FASTING_GLUCOSE, or IDRS_SCORE)")
             return DomainRiskResult(
                 risk_domain=self.domain,
                 score=None,
@@ -83,6 +86,7 @@ class DiabetesRiskModel(RiskModel):
                 input_snapshot=clean_inputs,
                 risk_factor_contributions=[],
                 confidence=0.0,
+                missing_requirements=missing_reqs,
                 limitations=["Missing mandatory glycemic biomarkers (HbA1c or Fasting Blood Glucose or IDRS)."],
                 recommended_next_step="Obtain laboratory HbA1c or fasting blood glucose screening test.",
                 is_clinically_validated=self.is_clinically_validated(),

@@ -1,3 +1,4 @@
+import uuid
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timezone
 import math
@@ -9,6 +10,9 @@ from services.trajectory.models import (
     DomainTrajectoryComparison,
     CitizenTrajectoryReport,
 )
+from packages.clinical_models.triage import ClinicalTriageCase, SOAPReport
+from packages.types.enums import TriageUrgency, ClinicianReviewStatus
+from services.store import store
 
 
 class RiskTrajectoryEngine:
@@ -31,6 +35,49 @@ class RiskTrajectoryEngine:
     # Clinical sensitivity threshold for score delta significance
     SCORE_DELTA_THRESHOLD = 0.04  # 4 percentage points
 
+    def check_snapshot_compatibility(
+        self, snap_a: RiskSnapshot, snap_b: RiskSnapshot
+    ) -> Tuple[bool, Optional[str]]:
+        """Verifies mathematical and clinical comparability between two snapshots (TC-TRJ-003)."""
+        # 1. Scoring scale check
+        if snap_a.scoring_scale != snap_b.scoring_scale:
+            return (
+                False,
+                f"Incompatible scoring scales detected: baseline uses '{snap_a.scoring_scale}' "
+                f"while current uses '{snap_b.scoring_scale}'. Direct numerical comparison is refused."
+            )
+
+        # 2. Demonstration vs Clinically Validated check
+        if snap_a.is_demonstration_only != snap_b.is_demonstration_only:
+            return (
+                False,
+                "Cannot compare unvalidated demonstration proxy model with clinically validated production model. "
+                "Direct numerical comparison is refused to prevent clinical misinterpretation."
+            )
+
+        # 3. Model Architecture check
+        if snap_a.model_name != snap_b.model_name:
+            return (
+                False,
+                f"Incompatible model architectures: baseline evaluated with '{snap_a.model_name}' "
+                f"while current evaluated with '{snap_b.model_name}'. Direct numerical comparison is refused."
+            )
+
+        # 4. Major Version Divergence check
+        v_a = snap_a.model_version.lstrip("v").split(".")[0] if snap_a.model_version else "1"
+        v_b = snap_b.model_version.lstrip("v").split(".")[0] if snap_b.model_version else "1"
+        v_a_digits = "".join(ch for ch in v_a if ch.isdigit()) or "1"
+        v_b_digits = "".join(ch for ch in v_b if ch.isdigit()) or "1"
+        if v_a_digits != v_b_digits:
+            return (
+                False,
+                f"Incompatible model versions: baseline version '{snap_a.model_version}' vs "
+                f"current version '{snap_b.model_version}' has major version divergence. "
+                f"Direct numerical comparison is refused."
+            )
+
+        return (True, None)
+
     def evaluate_trajectory(
         self,
         citizen_id: str,
@@ -49,6 +96,48 @@ class RiskTrajectoryEngine:
         baseline_snap = sorted_snaps[0]
         prev_snap = sorted_snaps[-2] if n >= 2 else None
         curr_snap = sorted_snaps[-1]
+
+        # TC-TRJ-003: Check comparability if multi-point trajectory
+        if n >= 2:
+            is_comp, limitation_reason = self.check_snapshot_compatibility(baseline_snap, curr_snap)
+            if not is_comp:
+                # Build refused comparison report
+                incomp_domains = {
+                    d: DomainTrajectoryComparison(
+                        domain=d,
+                        trend=TrajectoryTrendState.INSUFFICIENT_DATA,
+                        is_comparable=False,
+                        comparison_note=limitation_reason,
+                        contributing_factors=["Direct numerical comparison refused due to incompatible models or scoring scales."],
+                        clinical_note=limitation_reason or "Incompatible scoring models.",
+                    )
+                    for d in self.MANDATORY_DOMAINS
+                }
+                return CitizenTrajectoryReport(
+                    citizen_id=citizen_id,
+                    calculated_at=datetime.now(timezone.utc),
+                    total_snapshots=n,
+                    baseline_snapshot=baseline_snap,
+                    previous_snapshot=prev_snap,
+                    current_snapshot=curr_snap,
+                    historical_snapshots=sorted_snaps,
+                    domain_trajectories=incomp_domains,
+                    overall_trend=TrajectoryTrendState.INSUFFICIENT_DATA,
+                    composite_current_score=None,
+                    composite_baseline_score=None,
+                    composite_change_percentage=None,
+                    clinical_summary=f"Direct numerical comparison is refused: {limitation_reason}",
+                    is_comparable=False,
+                    numerical_comparison_refused=True,
+                    comparison_limitations=[limitation_reason] if limitation_reason else [],
+                    review_required=True,
+                    review_workflow_status="CLINICIAN_REVIEW_REQUIRED",
+                    review_priority="ROUTINE",
+                    recommended_review_actions=[
+                        "Re-baseline citizen under unified scoring model",
+                        "Perform manual clinical review of raw observations without automated delta",
+                    ],
+                )
 
         domain_comparisons: Dict[str, DomainTrajectoryComparison] = {}
         domain_trends: List[TrajectoryTrendState] = []
@@ -97,6 +186,66 @@ class RiskTrajectoryEngine:
             total_snapshots=n,
         )
 
+        # TC-TRJ-002: Clinical review workflow and automated triage case escalation
+        review_required = False
+        review_status = "STANDARD"
+        review_priority = "ROUTINE"
+        triage_case_id: Optional[str] = None
+        recommended_actions: List[str] = []
+
+        if overall_trend == TrajectoryTrendState.WORSENING:
+            review_required = True
+            review_status = "CLINICIAN_REVIEW_REQUIRED"
+            is_critical = any(c.current_tier == "CRITICAL" for c in domain_comparisons.values())
+            review_priority = "EMERGENT" if is_critical else "PRIORITY"
+            recommended_actions = [
+                "Physician clinical review required within 24-48 hours",
+                "Review biomarker elevations and verify adherence to therapy",
+                "Update personalized preventive care plan and order lab confirmation",
+            ]
+
+            # Register automated ClinicalTriageCase into store
+            citizen = store.get_citizen(citizen_id)
+            tenant_id = citizen.tenant_id if citizen else "default-tenant"
+            c_name = f"{citizen.first_name} {citizen.last_name}" if citizen else "Citizen"
+            triage_case_id = str(uuid.uuid4())
+
+            urgency_enum = TriageUrgency.EMERGENT if review_priority == "EMERGENT" else TriageUrgency.PRIORITY
+            worsening_names = [d for d, c in domain_comparisons.items() if c.trend == TrajectoryTrendState.WORSENING]
+
+            soap_note = SOAPReport(
+                subjective=f"Patient {c_name} presents with deteriorating longitudinal risk trajectory across key cardiometabolic domains.",
+                objective=f"Composite Risk: {composite_current*100 if composite_current else 0:.0f}%, Delta from baseline: {comp_change_pct:+.1f}%. Worsening domains: {', '.join(worsening_names)}.",
+                assessment="Algorithmic longitudinal risk trajectory indicates worsening disease progression. Requires prompt clinician review and intervention adjustment.",
+                plan="1. Review baseline and current vitals. 2. Verify adherence to prescribed lifestyle/pharmacotherapy. 3. Schedule tele-consultation.",
+            )
+            triage_case = ClinicalTriageCase(
+                id=triage_case_id,
+                tenant_id=tenant_id,
+                citizen_id=citizen_id,
+                citizen_name=c_name,
+                risk_assessment_id=f"traj-{citizen_id}",
+                urgency=urgency_enum,
+                escalation_reason=f"Worsening multi-domain trajectory: {comp_change_pct:+.1f}% composite increase across {len(worsening_names)} domains",
+                soap_note=soap_note,
+                status=ClinicianReviewStatus.PENDING,
+            )
+            store.add_triage_case(triage_case)
+
+        elif overall_trend == TrajectoryTrendState.IMPROVING:
+            review_required = False
+            review_status = "STANDARD"
+            review_priority = "ROUTINE"
+            recommended_actions = [
+                "Maintain ongoing preventive interventions and reinforce behavioral compliance",
+                "Continue standard quarterly monitoring intervals",
+            ]
+        else:
+            review_required = False
+            review_status = "STANDARD"
+            review_priority = "ROUTINE"
+            recommended_actions = ["Continue regular screening schedule"]
+
         return CitizenTrajectoryReport(
             citizen_id=citizen_id,
             calculated_at=datetime.now(timezone.utc),
@@ -111,6 +260,14 @@ class RiskTrajectoryEngine:
             composite_baseline_score=composite_baseline,
             composite_change_percentage=comp_change_pct,
             clinical_summary=clinical_summary,
+            is_comparable=True,
+            numerical_comparison_refused=False,
+            comparison_limitations=[],
+            review_required=review_required,
+            review_workflow_status=review_status,
+            review_priority=review_priority,
+            triage_case_id=triage_case_id,
+            recommended_review_actions=recommended_actions,
         )
 
     def _evaluate_domain(

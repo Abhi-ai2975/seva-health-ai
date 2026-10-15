@@ -70,6 +70,9 @@ class ObesityMetabolicRiskModel(RiskModel):
 
         has_bmi = "BMI" in clean_inputs or ("HEIGHT" in clean_inputs and "WEIGHT" in clean_inputs)
         if missing_mandatory or not has_bmi:
+            missing_reqs = list(missing_mandatory)
+            if not has_bmi:
+                missing_reqs.append("BMI or (HEIGHT and WEIGHT)")
             return DomainRiskResult(
                 risk_domain=self.domain,
                 score=None,
@@ -78,6 +81,7 @@ class ObesityMetabolicRiskModel(RiskModel):
                 input_snapshot=clean_inputs,
                 risk_factor_contributions=[],
                 confidence=0.0,
+                missing_requirements=missing_reqs,
                 limitations=["Missing mandatory anthropometric dimensions (Waist Circumference AND BMI/Height/Weight)."],
                 recommended_next_step="Measure waist circumference, standing height, and body weight.",
                 is_clinically_validated=self.is_clinically_validated(),

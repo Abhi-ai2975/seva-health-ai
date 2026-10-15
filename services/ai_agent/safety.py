@@ -78,6 +78,11 @@ class ClinicalSafetyEngine:
         r"\byou have chronic kidney disease\b",
         r"\byou definitely have cancer\b",
         r"\byour official diagnosis is\b",
+        r"\byou are diagnosed with\b",
+        r"\bthe screening score diagnoses you\b",
+        r"\bthis score proves you have\b",
+        r"\bi can confirm you have (type [12] )?diabetes\b",
+        r"\bi can confirm you have hypertension\b",
     ]
 
     PROHIBITED_PRESCRIPTION_PATTERNS = [
@@ -90,18 +95,46 @@ class ClinicalSafetyEngine:
         r"\bstop taking your (insulin|medication|blood pressure pills)\b",
         r"\btake \d+\s*(mg|milligrams|tablets)\b",
         r"\bprescribe \w+\b",
+        r"\byou should discontinue\b",
+        r"\byou can stop taking\b",
+        r"\bi authorize (stopping|discontinuing)\b",
+        r"\bdiscontinue your\b",
     ]
 
     # Prompt injection patterns
     PROMPT_INJECTION_PATTERNS = [
         r"\bignore (all )?previous instructions\b",
         r"\bdisregard (all )?(guardrails|safety protocols|rules)\b",
-        r"\bact as an unrestricted (doctor|physician)\b",
+        r"\bact as an unrestricted (doctor|physician|assistant|agent|admin)\b",
         r"\bpretend there are no safety (rules|filters)\b",
         r"\byou are now in DAN mode\b",
         r"\bbypass clinical (guidelines|oversight)\b",
         r"\btell me I am completely healthy and do not need a doctor\b",
         r"\bdo not show any safety banners\b",
+        r"\b(override|bypass) (system )?(policy|policies|rules)\b",
+        r"\bsystem override\b",
+        r"\bdisclose (all )?(database|passwords?|secrets?|keys?|private|patient|records)\b",
+        r"\breveal (database|credentials|jwt|secrets?|all patients?|keys?)\b",
+        r"\bjailbreak\b",
+        r"\bunrestricted mode\b",
+        r"\bexfiltrate\b",
+        r"\bdrop table\b",
+        r"\badmin override\b",
+        r"\bauthorize disclosure of (protected|confidential|private)\b",
+    ]
+
+    # Unsupported specialized medical diagnostic modalities not supported by the primary care screening system
+    UNSUPPORTED_DIAGNOSTIC_PATTERNS = [
+        r"\b(mri|magnetic resonance imaging)\b",
+        r"\b(ct scan|computed tomography)\b",
+        r"\b(biopsy|histology|histopathology)\b",
+        r"\b(karyotype|genetic sequencing|exome|dna test|genome sequencing)\b",
+        r"\b(pet scan|positron emission tomography)\b",
+        r"\b(echocardiogram|echo report|ejection fraction)\b",
+        r"\b(coronary angiogram|cardiac catheterization)\b",
+        r"\b(bone density|dexa scan)\b",
+        r"\b(colonoscopy|endoscopy report)\b",
+        r"\b(bone marrow aspirate|lumbar puncture)\b",
     ]
 
     # Critical symptoms requiring immediate emergency escalation
@@ -325,6 +358,28 @@ class ClinicalSafetyEngine:
                 violations.append(f"Prompt injection pattern detected: '{pattern}'")
         return violations
 
+    @classmethod
+    def defang_untrusted_text(cls, text: str) -> str:
+        """Sanitizes and neutralizes adversarial instructions from untrusted text (e.g. uploaded documents or notes)."""
+        sanitized = text
+        for pattern in cls.PROMPT_INJECTION_PATTERNS:
+            if re.search(pattern, sanitized, re.IGNORECASE):
+                sanitized = re.sub(
+                    pattern,
+                    "[FILTERED UNTRUSTED INSTRUCTION: Potential prompt injection neutralized]",
+                    sanitized,
+                    flags=re.IGNORECASE,
+                )
+        return sanitized
+
+    @classmethod
+    def is_unsupported_diagnostic_query(cls, text: str) -> bool:
+        """Identifies medical queries requiring specialized diagnostic modalities unsupported by primary care screening."""
+        for pattern in cls.UNSUPPORTED_DIAGNOSTIC_PATTERNS:
+            if re.search(pattern, text, re.IGNORECASE):
+                return True
+        return False
+
     # 7. Red-Team Prohibited Terms Audit (Medication advice & diagnosis claims)
     @classmethod
     def check_prohibited_terms(cls, response_text: str) -> Tuple[List[str], str]:
@@ -354,6 +409,12 @@ class ClinicalSafetyEngine:
                 )
 
         return violations, sanitized
+
+    @classmethod
+    def audit_ai_response(cls, text: str) -> Tuple[bool, str]:
+        """Audits AI response for prohibited clinical claims (diagnoses or prescriptions)."""
+        violations, sanitized = cls.check_prohibited_terms(text)
+        return (len(violations) == 0, sanitized)
 
     # 8. Master Safety Evaluation Pipeline
     @classmethod

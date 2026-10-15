@@ -18,6 +18,7 @@ from packages.types.enums import (
     AuditAction,
 )
 from packages.auth.jwt import TokenPayload
+from packages.auth.access_control import HealthcareAuthorizationEngine
 from packages.observability.audit import audit_logger
 from packages.clinical_models.triage import ClinicalTriageCase, SOAPReport
 from services.store import store, CitizenRecord, ConsentDirective, UserRecord
@@ -85,7 +86,16 @@ class HealthWorkerService:
         self._processed_idempotency: Dict[str, SyncItemResult] = {}
 
     def list_programs(self) -> List[CommunityProgram]:
-        return REGISTERED_PROGRAMS
+        stored = store.list_programs()
+        if not stored:
+            for p in REGISTERED_PROGRAMS:
+                store.add_program(p)
+            return REGISTERED_PROGRAMS
+        return stored
+
+    def register_program(self, program: CommunityProgram) -> CommunityProgram:
+        store.add_program(program)
+        return program
 
     def get_dashboard(self, actor: TokenPayload) -> HealthWorkerDashboard:
         worker_user = store.get_user(actor.sub)
@@ -224,6 +234,10 @@ class HealthWorkerService:
         grantee_role = actor.role
         duration_days = int(payload.get("duration_days", 365))
         purpose = payload.get("purpose", "CARE_DELIVERY")
+        scope = payload.get("scope") or ["vitals", "screening_answers", "lifestyle", "risk_scores"]
+        version = payload.get("version", "v1.0.0")
+        notice_id = payload.get("notice_id", "SYS-CON-001-NOTICE-V1")
+        category = payload.get("category", "health_screening")
 
         consent_dir = ConsentDirective(
             id=str(uuid.uuid4()),
@@ -231,9 +245,36 @@ class HealthWorkerService:
             grantee_id=grantee_id,
             grantee_role=grantee_role,
             purpose=purpose,
+            scope=scope,
+            category=category,
+            version=version,
+            notice_id=notice_id,
             expires_at=datetime.now(timezone.utc) + timedelta(days=duration_days),
         )
         store.add_consent(consent_dir)
+
+        # Mirror into consent_manager for cross-layer verification
+        try:
+            from packages.clinical_models.consent import consent_manager, ConsentCategory
+            cat_enum = ConsentCategory.HEALTH_SCREENING
+            try:
+                cat_enum = ConsentCategory(category)
+            except Exception:
+                pass
+            consent_manager.grant(
+                subject=citizen_id,
+                category=cat_enum,
+                purpose=purpose,
+                scope=scope,
+                recipient=grantee_id,
+                expires_at=consent_dir.expires_at,
+                version=version,
+                notice_id=notice_id,
+                actor_id=actor.sub,
+                actor_role=actor.role.value if hasattr(actor.role, "value") else str(actor.role),
+            )
+        except Exception:
+            pass
 
         audit_logger.record(
             tenant_id=actor.tenant_id,
@@ -242,7 +283,7 @@ class HealthWorkerService:
             action=AuditAction.CONSENT_GRANTED,
             resource_type="ConsentDirective",
             resource_id=consent_dir.id,
-            details={"citizen_id": citizen_id, "purpose": purpose},
+            details={"citizen_id": citizen_id, "purpose": purpose, "version": version, "notice_id": notice_id},
         )
         return consent_dir
 
@@ -252,8 +293,12 @@ class HealthWorkerService:
         payload: Dict[str, Any],
     ) -> Dict[str, Any]:
         citizen_id = payload.get("citizen_id")
-        if not citizen_id or not store.get_citizen(citizen_id):
+        citizen = store.get_citizen(citizen_id)
+        if not citizen_id or not citizen:
             raise ValueError(f"Citizen {citizen_id} not found.")
+
+        # Enforce program and jurisdiction access control
+        HealthcareAuthorizationEngine.enforce_citizen_access(actor, citizen, purpose="SCREENING")
 
         submission = ConfigurableScreeningSubmission(
             citizen_id=citizen_id,
@@ -278,6 +323,9 @@ class HealthWorkerService:
         citizen = store.get_citizen(citizen_id)
         if not citizen:
             raise ValueError(f"Citizen {citizen_id} not found.")
+
+        # Enforce program and jurisdiction access control
+        HealthcareAuthorizationEngine.enforce_citizen_access(actor, citizen, purpose="CARE_DELIVERY")
 
         screenings = store.get_citizen_screenings(citizen_id)
         latest_screen = screenings[-1] if screenings else None
@@ -401,6 +449,9 @@ class HealthWorkerService:
         if not citizen:
             raise ValueError(f"Citizen {payload.citizen_id} not found.")
 
+        # Enforce program and jurisdiction access control
+        HealthcareAuthorizationEngine.enforce_citizen_access(actor, citizen, purpose="REFERRAL")
+
         slip_id = f"REF-{datetime.now(timezone.utc).year}-MYS-{str(uuid.uuid4())[:6].upper()}"
         record = ReferralRecord(
             referral_slip_id=slip_id,
@@ -459,6 +510,9 @@ class HealthWorkerService:
         citizen = store.get_citizen(payload.citizen_id)
         if not citizen:
             raise ValueError(f"Citizen {payload.citizen_id} not found.")
+
+        # Enforce program and jurisdiction access control
+        HealthcareAuthorizationEngine.enforce_citizen_access(actor, citizen, purpose="FOLLOWUP")
 
         record = FollowUpRecord(
             citizen_id=payload.citizen_id,

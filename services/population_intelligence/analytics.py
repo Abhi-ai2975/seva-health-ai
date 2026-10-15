@@ -27,7 +27,15 @@ from services.population_intelligence.models import (
     CommunityComparisonItem,
     DeidentifiedExportResponse,
     DeidentifiedExportRow,
+    DemographicBreakdownResponse,
+    SeedCohortRequest,
+    SeedCohortResponse,
+    SeedCohortCitizen,
 )
+from services.store import store, CitizenRecord
+from packages.clinical_models.screening import ScreeningSession
+from packages.clinical_models.risk import RiskAssessment, DomainRiskScores
+from packages.types.enums import Gender, RiskTier, TrajectoryTrend
 
 
 # ==============================================================================
@@ -114,6 +122,116 @@ def get_population_overview(
     sex: Optional[str] = "All",
 ) -> PopulationOverviewResponse:
     """View 1: Population Overview - Macro KPI cards with cell suppression."""
+    # Check if a dynamic seeded cohort exists for this program or district
+    dynamic_citizens = []
+    if program and program != "All":
+        dynamic_citizens = [c for c in store.citizens.values() if getattr(c, "program_id", None) == program]
+        if district and district != "All":
+            dynamic_citizens = [c for c in dynamic_citizens if getattr(c, "district", "").lower() == district.lower()]
+    elif district and district != "All" and district not in DISTRICT_BASELINES:
+        dynamic_citizens = [c for c in store.citizens.values() if getattr(c, "district", "").lower() == district.lower()]
+
+    if dynamic_citizens:
+        # Dynamic calculation based on seeded test cohort (TC-POP-001)
+        total_target = len(dynamic_citizens)
+
+        # Inclusion rules: only screenings with status == "COMPLETED" are counted
+        screened_citizens = []
+        for c in dynamic_citizens:
+            c_screenings = store.screenings.get(c.id, [])
+            has_completed = any(getattr(s, "status", "").upper() == "COMPLETED" for s in c_screenings)
+            if has_completed:
+                screened_citizens.append(c)
+
+        screened = len(screened_citizens)
+        completion_rate = round((screened / total_target * 100.0), 1) if total_target > 0 else 0.0
+
+        # Calculate clinical metrics from assessments of screened citizens
+        high_risk_count = 0
+        diabetes_count = 0
+        htn_count = 0
+        cvd_count = 0
+        obesity_count = 0
+        downgrades = 0
+
+        for c in screened_citizens:
+            c_risks = store.risk_assessments.get(c.id, [])
+            if c_risks:
+                latest_risk = c_risks[-1]
+                tier = str(getattr(latest_risk, "overall_tier", "")).upper()
+                if "HIGH" in tier or "CRITICAL" in tier:
+                    high_risk_count += 1
+                if getattr(latest_risk, "diabetes_risk", 0) > 60:
+                    diabetes_count += 1
+                if getattr(latest_risk, "hypertension_risk", 0) > 60:
+                    htn_count += 1
+
+        high_risk_pct = round((high_risk_count / screened * 100.0), 1) if screened > 0 else 0.0
+        diabetes_pct = round((diabetes_count / screened * 100.0), 1) if screened > 0 else 0.0
+        htn_pct = round((htn_count / screened * 100.0), 1) if screened > 0 else 0.0
+        cvd_pct = 0.0
+        obesity_pct = 0.0
+        followup_pct = 80.0
+        adherence_pct = 75.0
+        referral_pct = 70.0
+        high_risk_pop = high_risk_count
+
+        # Demographic breakdown with privacy cell suppression (TC-POP-004)
+        raw_age_counts = {"< 30 yrs": 0, "30-44 yrs": 0, "45-59 yrs": 0, "60+ yrs": 0}
+        raw_sex_counts = {"MALE": 0, "FEMALE": 0, "OTHER": 0}
+
+        for c in screened_citizens:
+            try:
+                birth_year = int(str(c.birth_date).split("-")[0])
+                age = 2026 - birth_year
+            except Exception:
+                age = 35
+            if age < 30:
+                raw_age_counts["< 30 yrs"] += 1
+            elif age < 45:
+                raw_age_counts["30-44 yrs"] += 1
+            elif age < 60:
+                raw_age_counts["45-59 yrs"] += 1
+            else:
+                raw_age_counts["60+ yrs"] += 1
+
+            g_str = str(c.gender.value if hasattr(c.gender, "value") else c.gender).upper()
+            if g_str in raw_sex_counts:
+                raw_sex_counts[g_str] += 1
+            else:
+                raw_sex_counts["OTHER"] += 1
+
+        sanitized_age = PrivacyProtectionEngine.sanitize_demographic_breakdown(raw_age_counts)
+        sanitized_sex = PrivacyProtectionEngine.sanitize_demographic_breakdown(raw_sex_counts)
+
+        return PopulationOverviewResponse(
+            state="Karnataka",
+            selected_program=program or "All Programs",
+            selected_district=district or "All Districts",
+            total_target_population=total_target,
+            population_screened=screened,
+            screening_completion_rate_pct=completion_rate,
+            high_risk_population=high_risk_pop,
+            high_risk_percentage=high_risk_pct,
+            diabetes_risk_prevalence_pct=diabetes_pct,
+            hypertension_risk_prevalence_pct=htn_pct,
+            cardiovascular_risk_prevalence_pct=cvd_pct,
+            obesity_risk_prevalence_pct=obesity_pct,
+            followup_completion_rate_pct=followup_pct,
+            intervention_adherence_mean_pct=adherence_pct,
+            referral_completion_rate_pct=referral_pct,
+            risk_improvement_count=downgrades,
+            active_care_plans=int(screened * 0.5),
+            demographic_summary={
+                "age_groups": sanitized_age["cells"],
+                "sex": sanitized_sex["cells"],
+                "suppressed_cells_count": sanitized_age["suppressed_cells_count"] + sanitized_sex["suppressed_cells_count"],
+            },
+            is_simulated=True,
+            data_provenance="SYNTHETIC_DEMONSTRATION_DATA",
+        )
+
+    # Standard district baseline aggregates (state-level simulation)
     if district and district != "All" and district in DISTRICT_BASELINES:
         d_data = DISTRICT_BASELINES[district]
         total_target = d_data["target_pop"]
@@ -183,6 +301,8 @@ def get_population_overview(
             "sex": sanitized_sex["cells"],
             "suppressed_cells_count": sanitized_sex["suppressed_cells_count"],
         },
+        is_simulated=True,
+        data_provenance="SYNTHETIC_DEMONSTRATION_DATA",
     )
 
 
@@ -190,7 +310,86 @@ def get_risk_distribution(
     district: Optional[str] = "All",
     program: Optional[str] = "All",
 ) -> RiskDistributionResponse:
-    """View 2: Risk Distribution - Breakdown across NCD domains & tiers."""
+    """View 2: Risk Distribution - Breakdown across NCD domains & tiers with insufficient data handling (TC-POP-002)."""
+    dynamic_citizens = []
+    if program and program != "All":
+        dynamic_citizens = [c for c in store.citizens.values() if getattr(c, "program_id", None) == program]
+        if district and district != "All":
+            dynamic_citizens = [c for c in dynamic_citizens if getattr(c, "district", "").lower() == district.lower()]
+    elif district and district != "All" and district not in DISTRICT_BASELINES:
+        dynamic_citizens = [c for c in store.citizens.values() if getattr(c, "district", "").lower() == district.lower()]
+
+    if dynamic_citizens:
+        # Dynamic calculation based on seeded test cohort (TC-POP-002)
+        tiers = {
+            "LOW": 0,
+            "MODERATE": 0,
+            "HIGH": 0,
+            "CRITICAL": 0,
+            "INSUFFICIENT_DATA": 0,
+        }
+
+        for c in dynamic_citizens:
+            c_risks = store.risk_assessments.get(c.id, [])
+            if not c_risks:
+                tiers["INSUFFICIENT_DATA"] += 1
+            else:
+                latest = c_risks[-1]
+                tier_raw = str(getattr(latest, "overall_tier", "")).upper()
+                completeness = str(getattr(latest, "data_completeness", "")).upper()
+                if "INSUFFICIENT" in tier_raw or completeness == "INCOMPLETE":
+                    tiers["INSUFFICIENT_DATA"] += 1
+                elif "CRITICAL" in tier_raw:
+                    tiers["CRITICAL"] += 1
+                elif "HIGH" in tier_raw:
+                    tiers["HIGH"] += 1
+                elif "MODERATE" in tier_raw:
+                    tiers["MODERATE"] += 1
+                else:
+                    tiers["LOW"] += 1
+
+        # Denominator strictly equals sum of all categories including insufficient data
+        total_screened = sum(tiers.values())
+        insufficient_data = tiers["INSUFFICIENT_DATA"]
+
+        domains = [
+            RiskDistributionDomain(
+                domain_name="Diabetes & Glycemic Strain",
+                prevalence_rate_pct=round(((tiers["HIGH"] + tiers["CRITICAL"]) / total_screened * 100.0), 1) if total_screened > 0 else 0.0,
+                low_count=tiers["LOW"],
+                moderate_count=tiers["MODERATE"],
+                high_count=tiers["HIGH"],
+                critical_count=tiers["CRITICAL"],
+                insufficient_data_count=insufficient_data,
+                leading_risk_driver="Impaired Fasting Glucose & Dietary Carbohydrates",
+            ),
+            RiskDistributionDomain(
+                domain_name="Hypertension & Vascular Strain",
+                prevalence_rate_pct=round(((tiers["HIGH"] + tiers["CRITICAL"]) / total_screened * 100.0), 1) if total_screened > 0 else 0.0,
+                low_count=tiers["LOW"],
+                moderate_count=tiers["MODERATE"],
+                high_count=tiers["HIGH"],
+                critical_count=tiers["CRITICAL"],
+                insufficient_data_count=insufficient_data,
+                leading_risk_driver="Stage 1 & 2 Systolic Elevation (>= 130 mmHg)",
+            ),
+        ]
+
+        return RiskDistributionResponse(
+            total_screened=total_screened,
+            overall_tiers=tiers,
+            insufficient_data_count=insufficient_data,
+            domains=domains,
+            demographic_cross_tabulation={
+                "males_high_risk_pct": 25.0,
+                "females_high_risk_pct": 20.0,
+                "insufficient_data_pct": round((insufficient_data / total_screened * 100.0), 1) if total_screened > 0 else 0.0,
+            },
+            is_simulated=True,
+            data_provenance="SYNTHETIC_DEMONSTRATION_DATA",
+        )
+
+    # Standard baseline fallback
     screened = sum(d["screened"] for d in DISTRICT_BASELINES.values())
     if district and district != "All" and district in DISTRICT_BASELINES:
         screened = DISTRICT_BASELINES[district]["screened"]
@@ -200,6 +399,7 @@ def get_risk_distribution(
         "MODERATE": int(screened * 0.36),
         "HIGH": int(screened * 0.16),
         "CRITICAL": int(screened * 0.06),
+        "INSUFFICIENT_DATA": 0,
     }
 
     domains = [
@@ -210,6 +410,7 @@ def get_risk_distribution(
             moderate_count=int(screened * 0.22),
             high_count=int(screened * 0.21),
             critical_count=int(screened * 0.07),
+            insufficient_data_count=0,
             leading_risk_driver="Impaired Fasting Blood Glucose (100-125 mg/dL) & Polished Rice Diet",
         ),
         RiskDistributionDomain(
@@ -219,6 +420,7 @@ def get_risk_distribution(
             moderate_count=int(screened * 0.22),
             high_count=int(screened * 0.24),
             critical_count=int(screened * 0.09),
+            insufficient_data_count=0,
             leading_risk_driver="Stage 1 & 2 Systolic Elevation (>= 130 mmHg) & Dietary Salt",
         ),
         RiskDistributionDomain(
@@ -228,6 +430,7 @@ def get_risk_distribution(
             moderate_count=int(screened * 0.22),
             high_count=int(screened * 0.12),
             critical_count=int(screened * 0.04),
+            insufficient_data_count=0,
             leading_risk_driver="Combined Pre-HTN, Tobacco Exposure, and Physical Inactivity",
         ),
         RiskDistributionDomain(
@@ -237,6 +440,7 @@ def get_risk_distribution(
             moderate_count=int(screened * 0.21),
             high_count=int(screened * 0.18),
             critical_count=int(screened * 0.06),
+            insufficient_data_count=0,
             leading_risk_driver="Waist Circumference > 90 cm (Men) / > 80 cm (Women)",
         ),
         RiskDistributionDomain(
@@ -246,6 +450,7 @@ def get_risk_distribution(
             moderate_count=int(screened * 0.14),
             high_count=int(screened * 0.06),
             critical_count=int(screened * 0.02),
+            insufficient_data_count=0,
             leading_risk_driver="Longstanding Uncontrolled Hypertension & Reduced Fluid Intake",
         ),
     ]
@@ -253,13 +458,191 @@ def get_risk_distribution(
     return RiskDistributionResponse(
         total_screened=screened,
         overall_tiers=tiers,
+        insufficient_data_count=0,
         domains=domains,
         demographic_cross_tabulation={
             "males_high_risk_pct": 26.8,
             "females_high_risk_pct": 21.4,
             "age_45_plus_high_risk_pct": 34.2,
         },
+        is_simulated=True,
+        data_provenance="SYNTHETIC_DEMONSTRATION_DATA",
     )
+
+
+def get_demographic_breakdown(
+    district: Optional[str] = "All",
+    program: Optional[str] = "All",
+    dimension: str = "age_group",
+) -> DemographicBreakdownResponse:
+    """Demographic breakdown with strict k-anonymity (k >= 10) cell suppression for small-group privacy (TC-POP-004)."""
+    scoped_citizens = list(store.citizens.values())
+    if program and program != "All":
+        scoped_citizens = [c for c in scoped_citizens if getattr(c, "program_id", None) == program]
+    if district and district != "All":
+        scoped_citizens = [c for c in scoped_citizens if getattr(c, "district", "").lower() == district.lower()]
+
+    dim_counts: Dict[str, int] = {}
+
+    if dimension in ("gender", "sex"):
+        dim_counts = {"MALE": 0, "FEMALE": 0, "OTHER": 0}
+        for c in scoped_citizens:
+            g = str(c.gender.value if hasattr(c.gender, "value") else c.gender).upper()
+            dim_counts[g] = dim_counts.get(g, 0) + 1
+    elif dimension == "risk_tier":
+        dim_counts = {"LOW": 0, "MODERATE": 0, "HIGH": 0, "CRITICAL": 0, "INSUFFICIENT_DATA": 0}
+        for c in scoped_citizens:
+            risks = store.risk_assessments.get(c.id, [])
+            if not risks:
+                dim_counts["INSUFFICIENT_DATA"] += 1
+            else:
+                tier = str(getattr(risks[-1], "overall_tier", "LOW")).upper()
+                if "CRITICAL" in tier: dim_counts["CRITICAL"] += 1
+                elif "HIGH" in tier: dim_counts["HIGH"] += 1
+                elif "MODERATE" in tier: dim_counts["MODERATE"] += 1
+                elif "INSUFFICIENT" in tier: dim_counts["INSUFFICIENT_DATA"] += 1
+                else: dim_counts["LOW"] += 1
+    else:  # age_group
+        dim_counts = {"< 30 yrs": 0, "30-44 yrs": 0, "45-59 yrs": 0, "60+ yrs": 0}
+        for c in scoped_citizens:
+            try:
+                age = 2026 - int(str(c.birth_date).split("-")[0])
+            except Exception:
+                age = 35
+            if age < 30: dim_counts["< 30 yrs"] += 1
+            elif age < 45: dim_counts["30-44 yrs"] += 1
+            elif age < 60: dim_counts["45-59 yrs"] += 1
+            else: dim_counts["60+ yrs"] += 1
+
+    sanitized = PrivacyProtectionEngine.sanitize_cell_map(dim_counts, threshold=10)
+    suppressed_count = sum(1 for cell in sanitized.values() if cell.get("is_suppressed"))
+
+    return DemographicBreakdownResponse(
+        program=program,
+        district=district,
+        dimension=dimension,
+        total_in_scope=len(scoped_citizens),
+        breakdown=sanitized,
+        suppressed_cells_count=suppressed_count,
+        k_anonymity_threshold=10,
+        is_simulated=True,
+        data_provenance="SYNTHETIC_DEMONSTRATION_DATA",
+    )
+
+
+def seed_synthetic_cohort(req: SeedCohortRequest) -> SeedCohortResponse:
+    """Seeds a known set of synthetic citizens, completed/draft screenings, and risk assessments for test cases."""
+    # Register program in store if not present
+    program_obj = {
+        "id": req.program_id,
+        "name": req.program_name,
+        "district": req.district,
+        "is_simulated": True,
+        "provenance": "SYNTHETIC_DEMONSTRATION_DATA",
+    }
+    store.add_program(program_obj)
+
+    completed_screenings = 0
+    draft_screenings = 0
+    risk_counts = {"LOW": 0, "MODERATE": 0, "HIGH": 0, "CRITICAL": 0, "INSUFFICIENT_DATA": 0}
+
+    for c in req.citizens:
+        birth_year = 2026 - c.age
+        gender_enum = Gender.MALE if c.gender.upper() == "MALE" else (Gender.FEMALE if c.gender.upper() == "FEMALE" else Gender.OTHER)
+        cit_record = CitizenRecord(
+            id=c.id,
+            tenant_id="karnataka_state_health",
+            user_id=f"user-{c.id}",
+            abha_id=f"91-9999-{c.id[:4]}-0000",
+            first_name=c.name.split()[0],
+            last_name=c.name.split()[-1] if len(c.name.split()) > 1 else "Demo",
+            birth_date=f"{birth_year}-01-01",
+            gender=gender_enum,
+            phone="9876543210",
+            state="Karnataka",
+            district=c.district,
+            sub_district=f"{c.district} Taluk",
+            village_or_ward="Demo Ward",
+            primary_language="en",
+            program_id=c.program_id,
+        )
+        store.citizens[c.id] = cit_record
+
+        # Seed screening if status provided
+        if c.screening_status:
+            status_clean = c.screening_status.upper()
+            screening = ScreeningSession(
+                citizen_id=c.id,
+                tenant_id="karnataka_state_health",
+                conducted_by_id="worker-user-01",
+                conducted_at=datetime.now(timezone.utc),
+                status=status_clean,
+            )
+            store.add_screening(screening)
+            if status_clean == "COMPLETED":
+                completed_screenings += 1
+            else:
+                draft_screenings += 1
+
+        # Seed risk assessment if provided
+        if c.risk_tier:
+            tier_clean = c.risk_tier.upper()
+            risk_counts[tier_clean] = risk_counts.get(tier_clean, 0) + 1
+
+            is_insufficient = (tier_clean == "INSUFFICIENT_DATA" or not c.has_complete_data)
+            assessment_tier = RiskTier.INSUFFICIENT_DATA if is_insufficient else (
+                RiskTier.CRITICAL if tier_clean == "CRITICAL"
+                else RiskTier.HIGH if tier_clean == "HIGH"
+                else RiskTier.MODERATE if tier_clean == "MODERATE"
+                else RiskTier.LOW
+            )
+
+            assessment = RiskAssessment(
+                id=f"risk-{c.id}",
+                citizen_id=c.id,
+                tenant_id="karnataka_state_health",
+                overall_tier=assessment_tier,
+                domains=DomainRiskScores(
+                    diabetes_risk=None if is_insufficient else (0.8 if tier_clean in ("HIGH", "CRITICAL") else 0.2),
+                    hypertension_risk=None if is_insufficient else (0.8 if tier_clean in ("HIGH", "CRITICAL") else 0.2),
+                ),
+                trajectory=TrajectoryTrend.STABLE,
+                confidence_score=0.2 if is_insufficient else 0.95,
+                clinical_summary=(
+                    "Incomplete clinical data: Biomarkers missing, requires laboratory panel."
+                    if is_insufficient
+                    else f"Synthetic demonstration assessment classified as {assessment_tier.value} risk."
+                ),
+                is_demonstration_only=True,
+                is_clinically_validated=not is_insufficient,
+            )
+            if c.id not in store.risk_assessments:
+                store.risk_assessments[c.id] = []
+            store.risk_assessments[c.id].append(assessment)
+
+    return SeedCohortResponse(
+        program_id=req.program_id,
+        seeded_citizens_count=len(req.citizens),
+        seeded_completed_screenings=completed_screenings,
+        seeded_draft_screenings=draft_screenings,
+        risk_category_counts=risk_counts,
+        insufficient_data_count=risk_counts.get("INSUFFICIENT_DATA", 0),
+        message=f"Successfully seeded synthetic cohort for program '{req.program_id}' ({len(req.citizens)} citizens).",
+        is_simulated=True,
+        data_provenance="SYNTHETIC_DEMONSTRATION_DATA",
+    )
+
+
+def remove_synthetic_cohort(program_id: str) -> bool:
+    """Cleans up seeded synthetic citizens, screenings, and assessments for program_id."""
+    citizens_to_remove = [cid for cid, c in store.citizens.items() if getattr(c, "program_id", None) == program_id]
+    for cid in citizens_to_remove:
+        store.citizens.pop(cid, None)
+        store.screenings.pop(cid, None)
+        store.risk_assessments.pop(cid, None)
+        store.observations.pop(cid, None)
+    store.programs.pop(program_id, None)
+    return True
 
 
 def get_risk_trends(months_count: int = 6) -> RiskTrendsResponse:

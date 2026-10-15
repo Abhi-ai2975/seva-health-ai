@@ -31,6 +31,8 @@ class ScreeningSessionCreate(BaseModel):
     idrs: Optional[IDRSSurvey] = None
     vitals: Optional[VitalsPayload] = None
     notes: Optional[str] = None
+    status: Optional[str] = "COMPLETED"
+    questionnaire_version: Optional[str] = "1.0.0"
 
 
 class ScreeningSession(ScreeningSessionCreate):
@@ -40,3 +42,6 @@ class ScreeningSession(ScreeningSessionCreate):
     conducted_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     calculated_idrs_score: Optional[int] = None
     calculated_cbac_score: Optional[int] = None
+    status: str = "COMPLETED"
+    questionnaire_version: str = "1.0.0"
+

@@ -28,4 +28,15 @@ class ClinicalTriageCase(BaseModel):
     assigned_clinician_id: Optional[str] = None
     review_notes: Optional[str] = None
     reviewed_at: Optional[datetime] = None
+    is_acknowledged: bool = False
+    acknowledged_at: Optional[datetime] = None
+    acknowledged_by: Optional[str] = None
+    decision: Optional[str] = None
+    review_history: list[Dict[str, Any]] = Field(default_factory=list)
+    idempotency_key: Optional[str] = None
+    event_hash: Optional[str] = None
+    duplicate_submission_count: int = 0
+    last_duplicate_event_at: Optional[datetime] = None
+    duplicate_events: list[Dict[str, Any]] = Field(default_factory=list)
+    associated_notification_ids: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

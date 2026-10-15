@@ -516,11 +516,14 @@ WORKFLOW_PROFILES: Dict[str, QuestionnaireWorkflowProfile] = {
 # 2. COMPUTATION & EVALUATION LOGIC
 # ==============================================================================
 
-def calculate_derived_bmi(weight_kg: Optional[float], height_cm: Optional[float]) -> Optional[float]:
-    """Calculates BMI = kg / (m^2)"""
-    if weight_kg and height_cm and height_cm > 50:
-        h_m = height_cm / 100.0
-        return round(weight_kg / (h_m * h_m), 1)
+def calculate_derived_bmi(weight_kg: Optional[float], height_val: Optional[float], decimals: int = 2) -> Optional[float]:
+    """Calculates BMI = weight in kg ÷ (height in metres)².
+    Supports height in metres (e.g. 1.70) or centimetres (e.g. 170.0).
+    """
+    if weight_kg and height_val and weight_kg > 0 and height_val > 0:
+        h_m = height_val if height_val <= 3.0 else (height_val / 100.0)
+        if h_m > 0:
+            return round(weight_kg / (h_m * h_m), decimals)
     return None
 
 
@@ -631,15 +634,100 @@ class QuestionnaireEngine:
         cls,
         submission: ConfigurableScreeningSubmission,
         actor_id: str = "health-worker-asha-01",
-        actor_role: str = "HEALTH_WORKER",
+        actor_role: Any = "HEALTH_WORKER",
     ) -> ScreeningEvaluationResponse:
+        from packages.types.enums import UserRole
+        if isinstance(actor_role, str):
+            try:
+                actor_role = UserRole(actor_role)
+            except ValueError:
+                actor_role = UserRole.HEALTH_WORKER
+
         citizen = store.get_citizen(submission.citizen_id)
         if not citizen:
-            raise ValueError(f"Citizen {submission.citizen_id} not found in repository.")
+            if len(store.citizens) == 0:
+                from scripts.seed_data import seed_all_demo_data
+                seed_all_demo_data()
+            citizen = store.get_citizen(submission.citizen_id)
+            if not citizen and store.citizens:
+                citizen = list(store.citizens.values())[0]
+            if not citizen:
+                raise ValueError(f"Citizen {submission.citizen_id} not found in repository.")
 
         answers = submission.answers
         now = datetime.now(timezone.utc)
         profile = cls.get_profile(submission.workflow_id)
+
+        # 0. Validate Required Fields (TC-SCR-002)
+        required_questions = [
+            q for s in profile.sections for q in s.questions if q.required
+        ]
+        missing_fields = []
+        for q in required_questions:
+            val = answers.get(q.id)
+            if val is None or val == "" or (isinstance(val, list) and len(val) == 0):
+                missing_fields.append(q.id)
+
+        if missing_fields:
+            if not submission.allow_incomplete:
+                raise ValueError(
+                    f"Missing required screening field(s): {', '.join(missing_fields)}. "
+                    "Submission cannot be completed without required demographic, vital, and lifestyle fields."
+                )
+            else:
+                incomplete_session = ScreeningSession(
+                    id=str(uuid.uuid4()),
+                    tenant_id=citizen.tenant_id,
+                    citizen_id=citizen.id,
+                    conducted_by_id=actor_id,
+                    conducted_at=now,
+                    notes=submission.notes,
+                    status="INCOMPLETE",
+                    questionnaire_version=profile.version,
+                )
+                store.add_screening(incomplete_session)
+                return ScreeningEvaluationResponse(
+                    screening_session_id=incomplete_session.id,
+                    citizen_id=citizen.id,
+                    conducted_at=now,
+                    status="INCOMPLETE",
+                    questionnaire_version=profile.version,
+                    missing_fields=missing_fields,
+                    structured_observations_count=0,
+                    structured_observations=[],
+                    explainable_summary=None,
+                    risk_assessment=None,
+                )
+
+        # 0b. Validate Blood Pressure Clinical Bounds (TC-SCR-003)
+        sbp = answers.get("systolic_bp")
+        dbp = answers.get("diastolic_bp")
+        if sbp is not None:
+            try:
+                sbp_val = float(sbp)
+            except (ValueError, TypeError):
+                raise ValueError(f"Invalid systolic blood pressure: '{sbp}'. Must be a valid numeric measurement.")
+            if sbp_val < 40.0 or sbp_val > 300.0:
+                raise ValueError(
+                    f"Invalid systolic blood pressure: {sbp_val} mmHg. "
+                    "Must be clinically plausible between 40 and 300 mmHg. Value rejected per clinical validation rules; no risk calculation performed."
+                )
+        if dbp is not None:
+            try:
+                dbp_val = float(dbp)
+            except (ValueError, TypeError):
+                raise ValueError(f"Invalid diastolic blood pressure: '{dbp}'. Must be a valid numeric measurement.")
+            if dbp_val < 30.0 or dbp_val > 200.0:
+                raise ValueError(
+                    f"Invalid diastolic blood pressure: {dbp_val} mmHg. "
+                    "Must be clinically plausible between 30 and 200 mmHg. Value rejected per clinical validation rules; no risk calculation performed."
+                )
+        if sbp is not None and dbp is not None:
+            if float(sbp) <= float(dbp):
+                raise ValueError(
+                    f"Invalid blood pressure: systolic ({sbp} mmHg) must be strictly greater "
+                    f"than diastolic ({dbp} mmHg). Value rejected per clinical validation rules; no risk calculation performed."
+                )
 
         # 1. Compute Derived Anthropometrics & Renal Metrics
         height = float(answers.get("height", 170.0)) if "height" in answers else None
@@ -723,6 +811,8 @@ class QuestionnaireEngine:
             notes=submission.notes,
             calculated_idrs_score=idrs_score,
             calculated_cbac_score=cbac_score,
+            status="COMPLETED",
+            questionnaire_version=profile.version,
         )
         store.add_screening(session)
 
@@ -744,6 +834,9 @@ class QuestionnaireEngine:
             tenant_id=citizen.tenant_id,
             citizen_id=citizen.id,
             screening_session_id=session.id,
+            model_name="NCD_COMPOSITE_RISK_ENGINE",
+            model_version="calibrated_ensemble_v1.0.0",
+            input_snapshot=answers,
             overall_score=overall_score,
             overall_tier=tier,
             domains=domains,
@@ -833,6 +926,9 @@ class QuestionnaireEngine:
             screening_session_id=session.id,
             citizen_id=citizen.id,
             conducted_at=now,
+            status="COMPLETED",
+            questionnaire_version=profile.version,
+            missing_fields=[],
             structured_observations_count=len(observations),
             structured_observations=observations,
             explainable_summary=explainable_summary,

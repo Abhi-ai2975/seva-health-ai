@@ -33,6 +33,13 @@ class RiskSnapshot(BaseModel):
     source: str = "SCREENING"                       # SCREENING | LAB_PANEL | WEARABLE_AGGREGATE | CLINICAL_REVIEW
     data_completeness: float = 1.0                  # Ratio of observed metrics (0.0 - 1.0)
     confidence: float = 0.90                        # Sensor and assay confidence (0.0 - 1.0)
+    
+    # Model provenance and scoring scale specifications (TC-TRJ-003)
+    model_name: str = "NCD_COMPOSITE_RISK_ENGINE"
+    model_version: str = "calibrated_ensemble_v1.0.0"
+    scoring_scale: str = "PROBABILITY_0_1"          # PROBABILITY_0_1 | INTEGER_0_100 | POINTS_0_50 | ORDINAL_SCORE
+    is_clinically_validated: bool = True
+    is_demonstration_only: bool = False
 
 
 class DomainTrajectoryComparison(BaseModel):
@@ -60,6 +67,10 @@ class DomainTrajectoryComparison(BaseModel):
     confidence: float = 0.85
     data_completeness: float = 1.0
     clinical_note: str = ""
+    
+    # Model comparability indicator
+    is_comparable: bool = True
+    comparison_note: Optional[str] = None
 
 
 class CitizenTrajectoryReport(BaseModel):
@@ -86,3 +97,34 @@ class CitizenTrajectoryReport(BaseModel):
         "guideline-based risk estimates. Observed correlations do not prove causality. "
         "Any therapeutic or medication modifications require physician consultation."
     )
+    
+    # Model comparability flags & limitation notices (TC-TRJ-003)
+    is_comparable: bool = True
+    numerical_comparison_refused: bool = False
+    comparison_limitations: List[str] = []
+    
+    # Review workflow behavior flags (TC-TRJ-002)
+    review_required: bool = False
+    review_workflow_status: str = "STANDARD"  # STANDARD | CLINICIAN_REVIEW_REQUIRED | ESCALATED_TRIAGE
+    review_priority: Optional[str] = None     # ROUTINE | PRIORITY | EMERGENT
+    triage_case_id: Optional[str] = None
+    recommended_review_actions: List[str] = []
+
+
+class TrajectoryComparisonRequest(BaseModel):
+    citizen_id: str
+    baseline_snapshot_id: Optional[str] = None
+    current_snapshot_id: Optional[str] = None
+    strict: bool = False
+
+
+class TrajectoryComparisonResponse(BaseModel):
+    citizen_id: str
+    is_comparable: bool
+    numerical_comparison_refused: bool
+    limitation_reason: Optional[str] = None
+    baseline_version: Optional[str] = None
+    current_version: Optional[str] = None
+    baseline_scale: Optional[str] = None
+    current_scale: Optional[str] = None
+    report: Optional[CitizenTrajectoryReport] = None

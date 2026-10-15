@@ -103,6 +103,9 @@ class PreventionPlanInput(BaseModel):
     clinician_recommendations: List[str] = []           # Specific clinical orders or restrictions
 
 
+from packages.clinical_models.care_plan import DailyTask, PlanModificationRecord, CitizenCheckIn, DEFAULT_CARE_PLAN_LIMITATIONS
+
+
 class ComprehensivePreventionPlan(BaseModel):
     """30-Day Prevention Care Plan adhering to all safety, evidence, and personalization criteria."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -122,6 +125,13 @@ class ComprehensivePreventionPlan(BaseModel):
     measurements: List[MeasurementSchedule] = []
     follow_up_schedule: List[FollowUpEvent] = []
     
+    # TC-PLN-001 Required Structural Fields
+    frequency: str = "Daily activities with weekly milestones"
+    follow_up_timing: str = "Day 7 (ASHA check-in), Day 14 (Nurse review), Day 30 (Clinician re-assessment)"
+    limitations: List[str] = Field(default_factory=lambda: list(DEFAULT_CARE_PLAN_LIMITATIONS))
+    version: int = 1
+    history: List[PlanModificationRecord] = Field(default_factory=list)
+    
     # Progress & Adherence
     adherence_percentage: float = 0.0
     
@@ -135,3 +145,30 @@ class ComprehensivePreventionPlan(BaseModel):
     clinician_review_status: str = "PENDING"
     clinician_id: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class PlanModificationRequest(BaseModel):
+    """Payload submitted by authorized clinician to modify a care plan."""
+    goals: Optional[List[str]] = None
+    nutrition_guidance: Optional[str] = None
+    activity_guidance: Optional[str] = None
+    sleep_guidance: Optional[str] = None
+    stress_guidance: Optional[str] = None
+    limitations: Optional[List[str]] = None
+    follow_up_timing: Optional[str] = None
+    frequency: Optional[str] = None
+    actions: Optional[List[Dict[str, Any]]] = None
+    daily_tasks: Optional[List[DailyTask]] = None
+    reason: Optional[str] = "Clinical personalization"
+    notes: Optional[str] = None
+
+
+class CitizenCheckInCreate(BaseModel):
+    """Payload submitted during a citizen daily check-in."""
+    feeling: str = "Normal"  # Energetic | Normal | Tired | Unwell
+    medication_adherence: bool = True
+    symptoms: List[str] = Field(default_factory=list)
+    notes: Optional[str] = None
+    tasks_completed_count: Optional[int] = 0
+

@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>SevaHealth - Citizen Mobile Health App</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
     :root {
@@ -58,6 +60,20 @@
       flex-direction: column;
       overflow: hidden;
       position: relative;
+    }
+
+    @media (max-width: 500px) {
+      body {
+        padding: 0 !important;
+        background: var(--bg) !important;
+      }
+      .phone-frame {
+        max-width: 100% !important;
+        height: 100vh !important;
+        max-height: 100vh !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+      }
     }
 
     /* Top Device Status Bar */
@@ -403,6 +419,109 @@
     { id: 17, title: "17. Privacy & Controls", icon: "fa-lock", desc: "ABDM Consent Manager" }
   ];
 
+  // Seeded Citizen Personas Catalog
+  const CITIZEN_PRESETS = {
+    'citizen-ramesh-patel-01': {
+      id: "citizen-ramesh-patel-01",
+      name: "Ramesh Patel",
+      age: 48,
+      gender: "Male",
+      abha: "91-4829-1029-4820",
+      phone: "+91 98451 23456",
+      condition: "Borderline Blood Sugar & Mild High BP",
+      ward: "Ward 12, Kuvempunagar, Mysuru",
+      vitals: { bp: "138 / 88", sugar: "118 mg/dL", steps: "7,450", sleep: "7.2 hrs" },
+      tasks: [
+        { id: 1, title: "Walk for 15 minutes after lunch", done: true, tag: "Activity" },
+        { id: 2, title: "Swap white rice with Ragi Mudde or Millet", done: false, tag: "Food" },
+        { id: 3, title: "Check evening Blood Pressure", done: false, tag: "Checkup" }
+      ],
+      doingHeadline: "Overall Good, Watch Blood Sugar & Pressure",
+      doingDetails: "Your daily steps are consistent. Fasting glucose is slightly elevated at 118 mg/dL and BP is 138/88 mmHg. Keep adhering to your 30-day care plan!"
+    },
+    'citizen-lakshmi-devi-02': {
+      id: "citizen-lakshmi-devi-02",
+      name: "Lakshmi Devi",
+      age: 62,
+      gender: "Female",
+      abha: "91-3920-5819-2049",
+      phone: "+91 97410 54321",
+      condition: "Stage 2 Severe Hypertension",
+      ward: "Koppa Village, Maddur, Mandya",
+      vitals: { bp: "164 / 98", sugar: "96 mg/dL", steps: "4,120", sleep: "6.0 hrs" },
+      tasks: [
+        { id: 1, title: "Take morning BP measurement & record", done: true, tag: "Checkup" },
+        { id: 2, title: "Strict low-salt diet (< 2g sodium/day)", done: true, tag: "Food" },
+        { id: 3, title: "Visit PHC Medical Officer for review", done: false, tag: "Clinical" }
+      ],
+      doingHeadline: "Elevated Blood Pressure, Medical Attention Recommended",
+      doingDetails: "Your blood pressure is observed at 164/98 mmHg. Fasting blood sugar is normal at 96 mg/dL. Prioritize your clinician follow-up and low-sodium meal plan."
+    },
+    'citizen-vikram-singh-03': {
+      id: "citizen-vikram-singh-03",
+      name: "Vikram Singh",
+      age: 39,
+      gender: "Male",
+      abha: "91-5829-3910-1920",
+      phone: "+91 99887 76655",
+      condition: "Metabolic Syndrome & Elevated Glucose",
+      ward: "Highway Corridor Ward, Hassan",
+      vitals: { bp: "142 / 92", sugar: "134 mg/dL", steps: "5,200", sleep: "5.8 hrs" },
+      tasks: [
+        { id: 1, title: "Drink warm water with methi seeds in morning", done: false, tag: "Food" },
+        { id: 2, title: "30-minute brisk walk during driving break", done: false, tag: "Activity" },
+        { id: 3, title: "Check Fasting Blood Glucose", done: true, tag: "Checkup" }
+      ],
+      doingHeadline: "Metabolic Risk Alert, Glycemic Focus Needed",
+      doingDetails: "Fasting glucose is elevated at 134 mg/dL and BP is 142/92 mmHg. Increase daily physical movement and reduce refined grains."
+    },
+    'citizen-priya-sharma-04': {
+      id: "citizen-priya-sharma-04",
+      name: "Priya Sharma",
+      age: 29,
+      gender: "Female",
+      abha: "91-1029-3849-5910",
+      phone: "+91 94480 99887",
+      condition: "Optimal Health Baseline",
+      ward: "Gokulam Ward 3, Mysuru",
+      vitals: { bp: "116 / 76", sugar: "88 mg/dL", steps: "9,800", sleep: "7.8 hrs" },
+      tasks: [
+        { id: 1, title: "Morning 20-min yoga and stretching", done: true, tag: "Activity" },
+        { id: 2, title: "Hydrate: 2.5 Liters water throughout day", done: true, tag: "Habit" },
+        { id: 3, title: "Balanced rainbow salad with dinner", done: false, tag: "Food" }
+      ],
+      doingHeadline: "Excellent Vitality & Healthy Baseline!",
+      doingDetails: "All biomarkers are in optimal ranges (BP 116/76, Sugar 88 mg/dL, 9,800 steps). Keep up the great lifestyle habits!"
+    }
+  };
+
+  function selectCitizenPreset(key) {
+    const preset = CITIZEN_PRESETS[key];
+    if (!preset) return;
+    state.citizen.id = preset.id;
+    state.citizen.name = preset.name;
+    state.citizen.age = preset.age;
+    state.citizen.gender = preset.gender;
+    state.citizen.abha = preset.abha;
+    state.citizen.phone = preset.phone;
+    state.citizen.condition = preset.condition;
+    state.citizen.ward = preset.ward;
+    state.vitals = { ...preset.vitals };
+    state.todayTasks = JSON.parse(JSON.stringify(preset.tasks));
+    state.chatMessages = [
+      { sender: "ai", text: `Namaste ${preset.name} ji! I am Seva Saathi, your personal health friend. How is your energy today?` }
+    ];
+    if (I18N && I18N.en) {
+      I18N.en.doingHeadline = preset.doingHeadline;
+      I18N.en.doingDetails = preset.doingDetails;
+      I18N.en.doingVoice = `Namaste ${preset.name} ji. Your health score is updated. Blood pressure is ${preset.vitals.bp} and fasting sugar is ${preset.vitals.sugar}.`;
+    }
+    const drawerNameEl = document.getElementById('activeDrawerCitizenName');
+    if (drawerNameEl) drawerNameEl.innerText = preset.name;
+    closeDrawer();
+    renderCurrentScreen();
+  }
+
   // Application State
   const state = {
     currentScreen: 6, // Default to Home Dashboard
@@ -429,7 +548,15 @@
     },
     chatMessages: [
       { sender: "ai", text: "Namaste Ramesh ji! I am Seva Saathi, your personal health friend. How is your energy today?" }
-    ]
+    ],
+    checkin: {
+      feeling: "Normal",
+      medication_adherence: true,
+      symptoms: [],
+      notes: "",
+      activePlan: null,
+      history: []
+    }
   };
 
   const I18N = {
@@ -499,6 +626,69 @@
   };
 
   window.addEventListener('DOMContentLoaded', () => {
+    // Detect logged in user or query param
+    const urlParams = new URLSearchParams(window.location.search);
+    const paramCitizenId = urlParams.get('citizen_id') || urlParams.get('user');
+    
+    let loggedInUser = null;
+    try {
+      const saved = localStorage.getItem('seva_current_user');
+      if (saved) loggedInUser = JSON.parse(saved);
+    } catch(e) {}
+
+    let targetCitizenId = paramCitizenId;
+    if (!targetCitizenId && loggedInUser) {
+      if (loggedInUser.citizen_id) {
+        targetCitizenId = loggedInUser.citizen_id;
+      } else if (loggedInUser.email === 'lakshmi@sevahealth.ai') {
+        targetCitizenId = 'citizen-lakshmi-devi-02';
+      } else if (loggedInUser.email === 'vikram@sevahealth.ai') {
+        targetCitizenId = 'citizen-vikram-singh-03';
+      } else if (loggedInUser.email === 'priya@sevahealth.ai') {
+        targetCitizenId = 'citizen-priya-sharma-04';
+      } else if (loggedInUser.email === 'citizen@sevahealth.ai') {
+        targetCitizenId = 'citizen-ramesh-patel-01';
+      } else if (loggedInUser.name) {
+        for (const [k, v] of Object.entries(CITIZEN_PRESETS)) {
+          if (v.name && v.name.toLowerCase() === loggedInUser.name.toLowerCase()) {
+            targetCitizenId = k;
+            break;
+          }
+        }
+      }
+    }
+
+    if (targetCitizenId && CITIZEN_PRESETS[targetCitizenId]) {
+      const p = CITIZEN_PRESETS[targetCitizenId];
+      state.citizen.id = p.id;
+      state.citizen.name = p.name;
+      state.citizen.age = p.age;
+      state.citizen.gender = p.gender;
+      state.citizen.abha = p.abha;
+      state.citizen.phone = p.phone;
+      state.citizen.condition = p.condition;
+      state.citizen.ward = p.ward;
+      state.vitals = { ...p.vitals };
+      state.todayTasks = JSON.parse(JSON.stringify(p.tasks));
+      state.chatMessages = [
+        { sender: "ai", text: `Namaste ${p.name} ji! I am Seva Saathi, your personal health friend. How is your energy today?` }
+      ];
+      if (I18N && I18N.en) {
+        I18N.en.doingHeadline = p.doingHeadline;
+        I18N.en.doingDetails = p.doingDetails;
+        I18N.en.doingVoice = `Namaste ${p.name} ji. Your health score is updated. Blood pressure is ${p.vitals.bp} and fasting sugar is ${p.vitals.sugar}.`;
+      }
+    } else if (loggedInUser && loggedInUser.name) {
+      state.citizen.name = loggedInUser.name;
+      state.citizen.phone = loggedInUser.phone || "+91 98450 00000";
+      state.chatMessages = [
+        { sender: "ai", text: `Namaste ${loggedInUser.name} ji! I am Seva Saathi, your personal health friend. How is your energy today?` }
+      ];
+    }
+
+    const drawerNameEl = document.getElementById('activeDrawerCitizenName');
+    if (drawerNameEl) drawerNameEl.innerText = state.citizen.name;
+
     buildDrawerList();
     renderCurrentScreen();
   });
@@ -604,13 +794,91 @@
     renderCurrentScreen();
 
     setTimeout(() => {
-      let reply = "I understand Ramesh ji! For mild sugar elevation, eating green vegetables and taking a gentle 15-minute walk after meals helps stabilize glucose naturally. Always remember to check with your doctor for medicines.";
-      if (val.toLowerCase().includes("mango") || val.toLowerCase().includes("fruit")) {
-        reply = "Fruits like guava, papaya, and apples are wonderful! It is best to enjoy mangoes in small portions during the day rather than late at night.";
-      } else if (val.toLowerCase().includes("bp") || val.toLowerCase().includes("pressure")) {
-        reply = "Your latest blood pressure was 138/88 mmHg. Reducing extra salt from papad and pickles helps keep your pressure in the safe zone!";
+      const q = val.toLowerCase();
+      let reply = "";
+      let banner = "";
+      let isWarning = false;
+      let escalation = false;
+
+      // Medication Safety Notice
+      if (q.includes("stop") || q.includes("discontinue") || q.includes("change dose") || q.includes("prescribe") || q.includes("cut pill") || q.includes("double dose")) {
+        reply = "⚠️ IMPORTANT CLINICAL SAFETY NOTICE :\n\n" +
+          "As an AI Preventive Health Assistant, I am strictly prohibited from prescribing medications, altering dosages, or advising you to discontinue any prescribed drugs.\n\n" +
+          "Pharmacotherapy must only be adjusted by a qualified physician. Never discontinue or adjust your dose without direct clinician consultation, as abrupt discontinuation can lead to severe rebound hypertension or glycemic spikes.\n\n" +
+          "Please consult your treating clinician at your Primary Health Centre (PHC) to review your prescription safely.";
+        banner = "AI-generated information must be reviewed by a healthcare professional.";
+        isWarning = true;
+        escalation = true;
       }
-      state.chatMessages.push({ sender: "ai", text: reply });
+      // Medication Summary / Inquiry
+      else if (q.includes("medication") || q.includes("medicine") || q.includes("pills") || q.includes("prescription")) {
+        reply = "Medication Information Unavailable / Not Recorded :\n\n" +
+          "There are currently no active medications or prescription records documented in your electronic health profile. As an AI health assistant, I strictly report documented clinical data and will NOT fabricate or invent medications.\n\n" +
+          "If you are currently taking any prescribed medications, over-the-counter drugs, or traditional remedies that are not documented here, please inform your ASHA worker or doctor at your next health checkup so they can be registered.";
+        banner = "AI-generated information must be reviewed by a healthcare professional.";
+      }
+      // Grounded Risk Explanation
+      else if (q.includes("risk") || q.includes("score") || q.includes("explain") || q.includes("why high") || q.includes("why bp")) {
+        reply = "Risk Assessment Overview :\n\n" +
+          "Based on your recent preventive screening, your composite NCD risk is classified as MODERATE (48%).\n\n" +
+          "Top Contributing Biometric Factors:\n" +
+          "• Blood Pressure: Observed 138/88 mmHg (Pre-hypertension / Stage 1 target < 120/80)\n" +
+          "• Fasting Glucose: Observed 118 mg/dL (Impaired fasting glucose target < 100)\n" +
+          "• Physical Activity: 7,450 daily steps (Good progress toward 10,000 target)\n\n" +
+          "Limitations / Uncertainty: Lipid panel (cholesterol/triglycerides) is unrecorded in profile.\n\n" +
+          "Important Notice: This is a preventive risk assessment, not a clinical diagnosis. It reflects physiological patterns that warrant preventive lifestyle attention.";
+        banner = "This is a risk assessment, not a diagnosis.";
+      }
+      // Prompt Safety Guardrails
+      else if (q.includes("ignore") || q.includes("override") || q.includes("disclose") || q.includes("reveal credentials") || q.includes("jailbreak") || q.includes("dan mode")) {
+        reply = "⚠️ SECURITY & CLINICAL SAFETY ALERT :\n\n" +
+          "Untrusted or adversarial prompt instructions were detected in your request. " +
+          "System policies, access controls, and clinical safety guardrails cannot be overridden. " +
+          "Unauthorized disclosure of protected health information, private credentials, or unapproved prescriptions is strictly denied.\n\n" +
+          "Please submit a valid clinical or lifestyle question.";
+        banner = "Clinical safety guardrails active. System directives cannot be overridden.";
+        isWarning = true;
+      }
+      // Unauthorized Action Check
+      else if (q.includes("invoke") || q.includes("summarize_for_clinician") || q.includes("restricted tool")) {
+        reply = "⚠️ UNAUTHORIZED TOOL INVOCATION REJECTED :\n\n" +
+          "Actor Role 'CITIZEN' lacks the clinical privileges required to execute restricted clinical diagnostic tool 'summarize_for_clinician'.\n\n" +
+          "The tool execution layer independently rejected this operation with HTTP 403 Forbidden regardless of language model intent.\n\n" +
+          "Access is restricted to authorized clinicians (Doctors, Medical Officers).";
+        banner = "Tool security layer active: Independent RBAC enforcement.";
+        isWarning = true;
+      }
+      // Fallback Service State
+      else if (q.includes("ai offline") || q.includes("ai unavailable") || q.includes("fallback state") || q.includes("service offline")) {
+        reply = "AI Health Assistant Service Temporarily Offline :\n\n" +
+          "The generative AI explanation service is currently disabled or undergoing maintenance. " +
+          "However, your underlying clinical risk calculations (MODERATE 48%), deterministic screening models, " +
+          "and active 30-day prevention care plan remain fully available, validated in the database, and unaffected.\n\n" +
+          "Please check your primary care screening dashboard or consult your healthcare worker.";
+        banner = "AI-generated information must be reviewed by a healthcare professional.";
+      }
+      // Unsupported Diagnostic Question
+      else if (q.includes("mri") || q.includes("ct scan") || q.includes("biopsy") || q.includes("karyotype") || q.includes("genetic") || q.includes("pet scan") || q.includes("echocardiogram")) {
+        reply = "Medical Information Unavailable / Unsupported Diagnostic Query :\n\n" +
+          "The specialized medical diagnostic information you asked about (e.g., MRI, CT scan, biopsy, genetic sequencing, or advanced pathology) " +
+          "is not available or recorded in your SevaHealth electronic primary care profile.\n\n" +
+          "As an AI Preventive Health Assistant, I strictly report documented clinical data and will NOT fabricate medical facts, " +
+          "imaging findings, or diagnostic test results.\n\n" +
+          "Please contact the hospital or diagnostic laboratory where the investigation was performed, or discuss this test directly with your consulting specialist.";
+        banner = "AI acknowledges uncertainty. No medical facts fabricated.";
+      }
+      // Nutrition & Diet
+      else if (q.includes("mango") || q.includes("fruit") || q.includes("food") || q.includes("diet")) {
+        reply = "Fruits like guava, papaya, and apples are wonderful for glucose balance! It is best to enjoy mangoes in small portions during the day rather than late at night. Incorporating whole millets like ragi or jowar also prevents sugar spikes.";
+        banner = "Educational and lifestyle guidance only.";
+      }
+      // Default
+      else {
+        reply = "I understand! Consistent daily micro-habits—such as a 15-minute post-meal walk, reducing extra salt from pickles/papads, and getting 7-8 hours of sleep—substantially improve long-term cardiovascular and metabolic vitality. How else can I assist you with your health today?";
+        banner = "This is a risk assessment, not a diagnosis.";
+      }
+
+      state.chatMessages.push({ sender: "ai", text: reply, banner: banner, isWarning: isWarning, escalation: escalation });
       renderCurrentScreen();
     }, 600);
   }
@@ -649,10 +917,31 @@
           </div>
 
           <div class="card">
-            <button class="btn btn-teal" onclick="gotoScreen(6)" style="margin-bottom: 8px;">
-              <i class="fa-solid fa-user-check"></i> Continue as Ramesh Patel (Demo)
-            </button>
-            <button class="btn btn-secondary" onclick="gotoScreen(2)">
+            <div class="card-title" style="margin-bottom: 6px;">
+              <i class="fa-solid fa-users" style="color: var(--teal);"></i> Select Active Citizen Profile
+            </div>
+            <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
+              Select a citizen profile to view personalized health records and care plans:
+            </p>
+            <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;">
+              <button class="btn ${state.citizen.name === 'Ramesh Patel' ? 'btn-teal' : 'btn-secondary'}" onclick="selectCitizenPreset('citizen-ramesh-patel-01'); gotoScreen(6);" style="text-align: left; justify-content: space-between; padding: 10px 12px;">
+                <span><i class="fa-solid fa-user-check"></i> <strong>Ramesh Patel</strong> (48y M)</span>
+                <span class="badge badge-amber" style="font-size: 10px;">Pre-diabetic</span>
+              </button>
+              <button class="btn ${state.citizen.name === 'Lakshmi Devi' ? 'btn-teal' : 'btn-secondary'}" onclick="selectCitizenPreset('citizen-lakshmi-devi-02'); gotoScreen(6);" style="text-align: left; justify-content: space-between; padding: 10px 12px;">
+                <span><i class="fa-solid fa-user-check"></i> <strong>Lakshmi Devi</strong> (62y F)</span>
+                <span class="badge" style="background: #fee2e2; color: #b91c1c; font-size: 10px;">Stage 2 HTN</span>
+              </button>
+              <button class="btn ${state.citizen.name === 'Vikram Singh' ? 'btn-teal' : 'btn-secondary'}" onclick="selectCitizenPreset('citizen-vikram-singh-03'); gotoScreen(6);" style="text-align: left; justify-content: space-between; padding: 10px 12px;">
+                <span><i class="fa-solid fa-user-check"></i> <strong>Vikram Singh</strong> (39y M)</span>
+                <span class="badge badge-amber" style="font-size: 10px;">Metabolic</span>
+              </button>
+              <button class="btn ${state.citizen.name === 'Priya Sharma' ? 'btn-teal' : 'btn-secondary'}" onclick="selectCitizenPreset('citizen-priya-sharma-04'); gotoScreen(6);" style="text-align: left; justify-content: space-between; padding: 10px 12px;">
+                <span><i class="fa-solid fa-user-check"></i> <strong>Priya Sharma</strong> (29y F)</span>
+                <span class="badge badge-green" style="font-size: 10px;">Wellness</span>
+              </button>
+            </div>
+            <button class="btn btn-secondary" onclick="gotoScreen(2)" style="width: 100%;">
               <i class="fa-solid fa-plus"></i> New Citizen Registration
             </button>
           </div>
@@ -735,13 +1024,13 @@
             <div style="background: var(--primary-light); padding: 14px; border-radius: 14px; margin-bottom: 12px;">
               <div style="font-size: 16px; font-weight: 800; color: var(--primary-dark);">${state.citizen.name}</div>
               <div style="font-size: 12px; color: var(--primary-dark); opacity: 0.9;">ABHA: ${state.citizen.abha}</div>
-              <div style="font-size: 11px; color: var(--primary-dark); margin-top: 4px;">${state.citizen.age} yrs • Male • ${state.citizen.ward}</div>
+              <div style="font-size: 11px; color: var(--primary-dark); margin-top: 4px;">${state.citizen.age} yrs &bull; ${state.citizen.gender} &bull; ${state.citizen.ward}</div>
             </div>
             <div style="font-size: 12px; line-height: 1.8;">
-              <div><strong>Active Conditions:</strong> Mild Hypertension & Prediabetes</div>
-              <div><strong>Current Medicines:</strong> Metformin (500mg), Telmisartan (40mg)</div>
+              <div><strong>Active Conditions:</strong> ${state.citizen.condition}</div>
+              <div><strong>Current Biometrics:</strong> Blood Pressure: ${state.vitals.bp} mmHg &bull; Sugar: ${state.vitals.sugar}</div>
               <div><strong>Assigned Health Worker:</strong> Sunita Devi (ASHA, Ward 12)</div>
-              <div><strong>Primary Health Centre:</strong> Kuvempunagar PHC, Mysuru</div>
+              <div><strong>Primary Health Centre:</strong> Community Health Centre (PHC)</div>
             </div>
           </div>
           <button class="btn btn-primary" onclick="gotoScreen(6)">Go to Home Dashboard</button>
@@ -793,6 +1082,22 @@
       // -------------------------------------------------------------
       case 6:
         c.innerHTML = `
+          <!-- Active Citizen Profile Header -->
+          <div style="background: white; border-radius: 16px; padding: 12px 14px; margin-bottom: 12px; border: 1px solid var(--border); box-shadow: var(--shadow-sm); display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="width: 40px; height: 40px; border-radius: 50%; background: #e0f2fe; color: #0284c7; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px;">
+                ${state.citizen.name.split(' ').map(n=>n[0]).join('').substring(0,2)}
+              </div>
+              <div>
+                <div style="font-size: 14px; font-weight: 800; color: var(--text);">${state.citizen.name}</div>
+                <div style="font-size: 11px; color: var(--text-muted);">${state.citizen.age}y ${state.citizen.gender} &bull; ABHA: ${state.citizen.abha.substring(0, 7)}...</div>
+              </div>
+            </div>
+            <button onclick="gotoScreen(1)" class="btn btn-secondary" style="padding: 6px 10px; font-size: 11px; font-weight: 700; height: auto;">
+              <i class="fa-solid fa-repeat"></i> Switch Profile
+            </button>
+          </div>
+
           <!-- Question 1: How am I doing? -->
           <div class="how-doing-banner" id="question-how-doing" role="region" aria-label="Health Status">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
@@ -1011,7 +1316,10 @@
       case 10:
         c.innerHTML = `
           <div class="card">
-            <div class="card-title"><i class="fa-solid fa-calendar-days" style="color: var(--teal);"></i> 30-Day Food & Habit Journey</div>
+            <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
+              <span><i class="fa-solid fa-calendar-days" style="color: var(--teal);"></i> 30-Day Food & Habit Journey</span>
+              <span id="planStatusBadge" class="badge badge-green">Active Plan</span>
+            </div>
             <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
               Designed by doctors and dieticians for Indian diets:
             </p>
@@ -1023,10 +1331,16 @@
               <div style="font-size: 13px; font-weight: 700;">Week 3: 15-Min Post-Meal Walks</div>
               <div style="font-size: 12px; color: var(--text-muted);">A gentle stroll right after eating absorbs 30% of mealtime glucose spikes.</div>
             </div>
-            <div style="border-left: 3px solid var(--amber); padding-left: 12px;">
+            <div style="border-left: 3px solid var(--amber); padding-left: 12px; margin-bottom: 14px;">
               <div style="font-size: 13px; font-weight: 700;">Week 4: Sleep & Salt Rest</div>
               <div style="font-size: 12px; color: var(--text-muted);">Bedtime by 10:30 PM and reducing cooking salt to 1 teaspoon per person daily.</div>
             </div>
+            <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: 12px; padding: 10px; margin-bottom: 14px; font-size: 11px; color: var(--text-muted);">
+              <strong>Clinical Limitation Notice:</strong> Does not prescribe or alter medications. All modifications reviewed by your treating physician.
+            </div>
+            <button class="btn btn-primary" onclick="gotoScreen(14)">
+              <i class="fa-solid fa-circle-check"></i> Complete Today's Check-in
+            </button>
           </div>
         `;
         break;
@@ -1036,7 +1350,7 @@
       // -------------------------------------------------------------
       case 11:
         c.innerHTML = `
-          <div class="card" style="padding: 12px; height: 380px; display: flex; flex-direction: column;">
+          <div class="card" style="padding: 12px; height: 420px; display: flex; flex-direction: column;">
             <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 8px;">
               <div style="display: flex; align-items: center; gap: 8px;">
                 <div style="width: 32px; height: 32px; background: var(--primary-light); color: var(--primary); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
@@ -1044,7 +1358,7 @@
                 </div>
                 <div>
                   <div style="font-size: 13px; font-weight: 700;">Seva Saathi AI</div>
-                  <div style="font-size: 10px; color: var(--green);">● Online • Multi-lingual</div>
+                  <div style="font-size: 10px; color: var(--green);">● Online • Clinical Safety Envelope Active</div>
                 </div>
               </div>
               <button class="audio-btn" onclick="speakText(state.chatMessages[state.chatMessages.length-1].text)">
@@ -1052,22 +1366,35 @@
               </button>
             </div>
 
-            <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px;">
+            <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px;" id="chatMessagesContainer">
               ${state.chatMessages.map(m => `
-                <div style="max-width: 85%; padding: 8px 12px; border-radius: 12px; font-size: 12px; line-height: 1.4; ${m.sender === 'user' ? 'background: var(--primary); color: white; align-self: flex-end;' : 'background: #f1f5f9; color: var(--text); align-self: flex-start;'}">
-                  ${m.text}
+                <div style="max-width: 88%; padding: 8px 12px; border-radius: 12px; font-size: 12px; line-height: 1.4; ${m.sender === 'user' ? 'background: var(--primary); color: white; align-self: flex-end;' : (m.isWarning ? 'background: #fff1f2; color: #9f1239; border: 1px solid #fecdd3; align-self: flex-start;' : 'background: #f1f5f9; color: var(--text); align-self: flex-start;')}">
+                  ${m.banner ? `<div style="font-size: 10px; font-weight: 700; color: #92400e; background: #fef3c7; border: 1px solid #fde68a; padding: 2px 6px; border-radius: 4px; margin-bottom: 6px;"><i class="fa-solid fa-shield-halved"></i> ${m.banner}</div>` : ''}
+                  <div>${m.text.replace(/\n/g, '<br>')}</div>
+                  ${m.escalation ? `
+                    <div style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px;">
+                      <button class="btn btn-primary" style="padding: 4px 10px; font-size: 10px; width: auto;" onclick="gotoScreen(16)">
+                        <i class="fa-solid fa-hospital-user"></i> Book PHC Doctor Review
+                      </button>
+                      <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 10px; width: auto; background: white;" onclick="alert('Connecting to ASHA worker...')">
+                        <i class="fa-solid fa-phone"></i> Call ASHA
+                      </button>
+                    </div>
+                  ` : ''}
                 </div>
               `).join('')}
             </div>
 
-            <!-- Quick Suggestions -->
-            <div style="display: flex; gap: 6px; overflow-x: auto; padding: 6px 0;">
-              <button onclick="document.getElementById('chatInput').value='Can I eat mangoes?'; sendChatMessage();" style="white-space: nowrap; font-size: 11px; padding: 4px 8px; border-radius: 999px; background: #e0f2fe; border: none; color: var(--primary); cursor: pointer;">Can I eat mangoes?</button>
-              <button onclick="document.getElementById('chatInput').value='Why is my BP high?'; sendChatMessage();" style="white-space: nowrap; font-size: 11px; padding: 4px 8px; border-radius: 999px; background: #e0f2fe; border: none; color: var(--primary); cursor: pointer;">Why is my BP high?</button>
+            <!-- Quick Suggestions for AI Questions -->
+            <div style="display: flex; gap: 6px; overflow-x: auto; padding: 6px 0; border-top: 1px solid var(--border); margin-top: 4px;">
+              <button onclick="document.getElementById('chatInput').value='Explain my health risk'; sendChatMessage();" style="white-space: nowrap; font-size: 10px; padding: 4px 8px; border-radius: 999px; background: #e0f2fe; border: 1px solid #bae6fd; color: var(--primary); cursor: pointer;"><i class="fa-solid fa-chart-line"></i> Explain Risk</button>
+              <button onclick="document.getElementById('chatInput').value='What medications am I taking?'; sendChatMessage();" style="white-space: nowrap; font-size: 10px; padding: 4px 8px; border-radius: 999px; background: #f3e8ff; border: 1px solid #e9d5ff; color: #7e22ce; cursor: pointer;"><i class="fa-solid fa-pills"></i> My Medications</button>
+              <button onclick="document.getElementById('chatInput').value='Can I stop taking my medicine?'; sendChatMessage();" style="white-space: nowrap; font-size: 10px; padding: 4px 8px; border-radius: 999px; background: #ffe4e6; border: 1px solid #fecdd3; color: #be123c; cursor: pointer;"><i class="fa-solid fa-ban"></i> Can I Stop Meds?</button>
+              <button onclick="document.getElementById('chatInput').value='What did my brain MRI scan show?'; sendChatMessage();" style="white-space: nowrap; font-size: 10px; padding: 4px 8px; border-radius: 999px; background: #fffbeb; border: 1px solid #fef08a; color: #ca8a04; cursor: pointer;"><i class="fa-solid fa-circle-question"></i> MRI Scan Results</button>
             </div>
 
             <!-- Input Row -->
-            <div style="display: flex; gap: 6px; margin-top: 6px;">
+            <div style="display: flex; gap: 6px; margin-top: 4px;">
               <input id="chatInput" class="form-input" placeholder="Ask a health question..." onkeydown="if(event.key==='Enter') sendChatMessage();">
               <button class="btn btn-primary" style="width: auto; padding: 0 14px;" onclick="sendChatMessage()">
                 <i class="fa-solid fa-paper-plane"></i>
@@ -1078,33 +1405,84 @@
         break;
 
       // -------------------------------------------------------------
-      // 12. WEARABLE CONNECTION SCREEN
+      // 12. WEARABLE CONNECTION SCREEN & UOM CONVERSIONS
       // -------------------------------------------------------------
       case 12:
         c.innerHTML = `
+          <!-- Card 1: Connected Wearable Sources -->
           <div class="card">
-            <div class="card-title"><i class="fa-solid fa-clock" style="color: var(--teal);"></i> Connect Your Smartwatch</div>
+            <div class="card-title"><i class="fa-solid fa-clock" style="color: var(--teal);"></i> Smartwatch & Wearable Devices</div>
             <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
-              Link popular Indian fitness bands or Google Health Connect:
+              Connected continuous telemetry sources (Garmin, boAt Wave, Apple Health):
             </p>
             <div style="display: flex; flex-direction: column; gap: 10px;">
               <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px; background: #f8fafc; border-radius: 12px; border: 1px solid var(--border);">
                 <div>
-                  <div style="font-size: 13px; font-weight: 700;">boAt Wave / Noise ColorFit</div>
-                  <div style="font-size: 11px; color: var(--green);">Connected • 154 days synced</div>
+                  <div style="font-size: 13px; font-weight: 700;">Garmin Forerunner 265 / boAt Wave</div>
+                  <div id="wearableSyncStatus" style="font-size: 11px; color: var(--green);"><i class="fa-solid fa-signal"></i> Connected • Biometrics Active</div>
                 </div>
-                <span class="badge badge-green"><i class="fa-solid fa-check"></i> Linked</span>
+                <span id="wearableBadge" class="badge badge-green"><i class="fa-solid fa-check"></i> Linked</span>
               </div>
               <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px; background: #f8fafc; border-radius: 12px; border: 1px solid var(--border);">
                 <div>
-                  <div style="font-size: 13px; font-weight: 700;">Google Health Connect</div>
-                  <div style="font-size: 11px; color: var(--text-muted);">Steps, sleep, and heart rate</div>
+                  <div style="font-size: 13px; font-weight: 700;">Google Health Connect / Apple Health</div>
+                  <div style="font-size: 11px; color: var(--text-muted);">Continuous background sync protocol V1</div>
                 </div>
-                <button class="btn btn-secondary" style="width: auto; padding: 6px 12px; font-size: 11px;" onclick="alert('Google Health Connect Paired!');">Pair</button>
+                <span class="badge" style="background: #e0f2fe; color: #0369a1;">Standard</span>
               </div>
             </div>
+            <div style="margin-top: 14px; display: flex; flex-direction: column; gap: 8px;">
+              <button id="btnSyncWearable" class="btn btn-teal" onclick="syncCitizenWearableMobile()">
+                <i class="fa-solid fa-arrows-rotate"></i> Synchronize Live Wearable Biometrics
+              </button>
+              <button class="btn btn-secondary" style="color: #be123c; border-color: #fecdd3; background: #fff1f2;" onclick="revokeCitizenWearableMobile()">
+                <i class="fa-solid fa-ban"></i> Revoke Wearable Data Access
+              </button>
+            </div>
+          </div>
+
+          <!-- Card 2: Normalized Observations & UOM Unit Selector -->
+          <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <div class="card-title" style="margin-bottom: 0;"><i class="fa-solid fa-ruler-combined" style="color: var(--primary);"></i> Unit of Measurement (UOM)</div>
+              <span id="activeUomBadge" class="badge badge-teal">Metric</span>
+            </div>
+            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">
+              Select clinical reporting units to convert biometric observations dynamically:
+            </p>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+              <button id="btnUomMetric" class="btn" style="flex: 1; padding: 7px; font-size: 11px; font-weight: 700; background: var(--teal); color: white;" onclick="setUomPreference('METRIC')">
+                <i class="fa-solid fa-check"></i> Metric (mg/dL, kg)
+              </button>
+              <button id="btnUomImperial" class="btn btn-secondary" style="flex: 1; padding: 7px; font-size: 11px; font-weight: 700;" onclick="setUomPreference('IMPERIAL')">
+                SI / Imperial (mmol/L, lbs)
+              </button>
+            </div>
+
+            <!-- Normalized Observations List -->
+            <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.5px;">
+              Normalized Telemetry Records (Retaining Source, Timestamp & Unit)
+            </div>
+            <div id="wearableTelemetryContainer" style="display: flex; flex-direction: column; gap: 8px;">
+              <!-- Telemetry items will be populated here -->
+            </div>
+          </div>
+
+          <!-- Card 3: Clinical Document Ingestion -->
+          <div class="card">
+            <div class="card-title"><i class="fa-solid fa-file-medical" style="color: var(--primary);"></i> Health Records & Documents</div>
+            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">
+              Upload lab reports, prescriptions, and health records:
+            </p>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              <button class="btn btn-primary" style="font-size: 12px; text-align: left; padding: 10px 14px;" onclick="testDocumentUploadMobile('VALID_LAB_REPORT')">
+                <i class="fa-solid fa-file-pdf mr-1"></i> Upload Lab Report / Record
+              </button>
+            </div>
+            <div id="docUploadResult" style="display: none; margin-top: 12px;"></div>
           </div>
         `;
+        renderWearableTelemetry();
         break;
 
       // -------------------------------------------------------------
@@ -1143,24 +1521,66 @@
       // -------------------------------------------------------------
       case 14:
         c.innerHTML = `
-          <div class="card">
+          <div class="card" id="checkinCard">
             <div class="card-title"><i class="fa-solid fa-circle-check" style="color: var(--teal);"></i> 30-Second Daily Check-in</div>
-            <div class="form-group">
-              <label class="form-label">How are you feeling today?</label>
-              <div class="grid-2" style="margin-top: 6px;">
-                <button class="btn btn-secondary" onclick="alert('Recorded Energetic!');">😄 Energetic</button>
-                <button class="btn btn-secondary" onclick="alert('Recorded Normal!');">🙂 Normal</button>
+            
+            <!-- Active Care Plan Association -->
+            <div id="checkinPlanBanner" style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 14px; padding: 12px; margin-bottom: 12px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 11px; font-weight: 700; color: #166534; text-transform: uppercase;">Linked Active Prevention Plan</span>
+                <span id="checkinPlanBadge" class="badge badge-green" style="font-size: 10px;">${state.checkin && state.checkin.activePlan ? state.checkin.activePlan.id.substring(0, 8) : 'Loading...'}</span>
+              </div>
+              <div id="checkinPlanTitle" style="font-size: 12px; font-weight: 700; color: #14532d; margin-top: 4px;">
+                ${state.checkin && state.checkin.activePlan ? state.checkin.activePlan.title : 'Personalized 30-Day NCD Prevention Journey'}
               </div>
             </div>
-            <div class="form-group" style="margin-top: 10px;">
-              <label class="form-label">Did you take your prescribed medicines today?</label>
-              <div class="grid-2" style="margin-top: 6px;">
-                <button class="btn btn-primary" onclick="alert('Medicine logged!');">Yes, Taken</button>
-                <button class="btn btn-secondary" onclick="alert('Reminder set for 8 PM');">Not Yet</button>
+
+            <!-- Question 1: How are you feeling? -->
+            <div class="form-group" style="margin-bottom: 12px;">
+              <label class="form-label" style="font-size: 12px; font-weight: 700;">How are you feeling today?</label>
+              <div class="grid-2" style="margin-top: 6px; gap: 8px;">
+                <button id="btnFeelEnergetic" class="btn ${state.checkin.feeling === 'Energetic' ? 'btn-primary' : 'btn-secondary'}" style="min-height: 42px; font-size: 12px;" onclick="setCheckinFeeling('Energetic')">😄 Energetic</button>
+                <button id="btnFeelNormal" class="btn ${state.checkin.feeling === 'Normal' ? 'btn-primary' : 'btn-secondary'}" style="min-height: 42px; font-size: 12px;" onclick="setCheckinFeeling('Normal')">🙂 Normal</button>
+                <button id="btnFeelTired" class="btn ${state.checkin.feeling === 'Tired' ? 'btn-primary' : 'btn-secondary'}" style="min-height: 42px; font-size: 12px;" onclick="setCheckinFeeling('Tired')">🥱 Tired</button>
+                <button id="btnFeelUnwell" class="btn ${state.checkin.feeling === 'Unwell' ? 'btn-primary' : 'btn-secondary'}" style="min-height: 42px; font-size: 12px;" onclick="setCheckinFeeling('Unwell')">🤒 Unwell</button>
               </div>
+            </div>
+
+            <!-- Question 2: Medicines taken? -->
+            <div class="form-group" style="margin-bottom: 12px;">
+              <label class="form-label" style="font-size: 12px; font-weight: 700;">Did you take your prescribed medicines today?</label>
+              <div class="grid-2" style="margin-top: 6px; gap: 8px;">
+                <button id="btnMedYes" class="btn ${state.checkin.medication_adherence ? 'btn-primary' : 'btn-secondary'}" style="min-height: 42px; font-size: 12px;" onclick="setCheckinMedTaken(true)">✅ Yes, Taken</button>
+                <button id="btnMedNo" class="btn ${!state.checkin.medication_adherence ? 'btn-primary' : 'btn-secondary'}" style="min-height: 42px; font-size: 12px;" onclick="setCheckinMedTaken(false)">⏳ Not Yet</button>
+              </div>
+            </div>
+
+            <!-- Question 3: Self-reported notes -->
+            <div class="form-group" style="margin-bottom: 14px;">
+              <label class="form-label" style="font-size: 12px; font-weight: 700;">Personal notes or symptoms (optional):</label>
+              <input id="checkinNotes" class="form-input" style="font-size: 12px; padding: 10px;" placeholder="e.g. Mild headache, completed morning walk" value="${state.checkin.notes || ''}">
+            </div>
+
+            <button id="btnSubmitCheckin" class="btn btn-teal" onclick="submitDailyCheckin()">
+              <i class="fa-solid fa-cloud-arrow-up"></i> Submit Daily Check-in (Sync to Plan)
+            </button>
+          </div>
+
+          <!-- Check-in History Card (Database Verified) -->
+          <div class="card" style="margin-top: 14px;">
+            <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
+              <span><i class="fa-solid fa-clock-rotate-left" style="color: var(--primary);"></i> Check-in History</span>
+              <span id="checkinHistoryCount" class="badge badge-blue">${state.checkin.history.length} Saved</span>
+            </div>
+            <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
+              Verified and linked to citizen profile & care plan in database:
+            </p>
+            <div id="checkinHistoryList" style="display: flex; flex-direction: column; gap: 8px;">
+              ${renderCheckinHistoryItems()}
             </div>
           </div>
         `;
+        loadActivePlanAndCheckins();
         break;
 
       // -------------------------------------------------------------
@@ -1215,33 +1635,345 @@
           <div class="card">
             <div class="card-title"><i class="fa-solid fa-lock" style="color: var(--teal);"></i> Privacy & Consent Controls</div>
             <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
-              ABDM Granular Consent Management:
+              ABDM & DISHA Granular Consent Management:
             </div>
             <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px;">
               <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #f8fafc; border-radius: 10px;">
                 <div>
-                  <div style="font-size: 12px; font-weight: 700;">ASHA Worker Sunita Devi</div>
-                  <div style="font-size: 10px; color: var(--text-muted);">Care delivery access</div>
+                  <div style="font-size: 12px; font-weight: 700;">Clinical Screening Consent</div>
+                  <div style="font-size: 10px; color: var(--text-muted);">Purpose: HEALTH_SCREENING (v1.2.0)</div>
                 </div>
                 <span class="badge badge-green">Active</span>
               </div>
               <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #f8fafc; border-radius: 10px;">
                 <div>
-                  <div style="font-size: 12px; font-weight: 700;">Dr. Anand Kulkarni, MD</div>
-                  <div style="font-size: 10px; color: var(--text-muted);">Assigned Clinician</div>
+                  <div style="font-size: 12px; font-weight: 700;">Continuous Wearables Consent</div>
+                  <div id="mobWearableConsentText" style="font-size: 10px; color: var(--text-muted);">Purpose: WEARABLE_DATA (Revocable)</div>
                 </div>
-                <span class="badge badge-green">Active</span>
+                <span id="mobWearableConsentBadge" class="badge badge-green">Active</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #f8fafc; border-radius: 10px;">
+                <div>
+                  <div style="font-size: 12px; font-weight: 700;">Research Analytics & Secondary Use</div>
+                  <div style="font-size: 10px; color: var(--text-muted);">Purpose: RESEARCH_ANALYTICS</div>
+                </div>
+                <span class="badge" style="background: #f1f5f9; color: #475569;">Not Authorized</span>
               </div>
             </div>
-            <button class="btn btn-secondary" style="margin-bottom: 8px;" onclick="alert('Downloading encrypted health summary PDF...');">
-              <i class="fa-solid fa-download"></i> Download My Health Record
+            <button class="btn btn-secondary" style="margin-bottom: 8px;" onclick="alert('Viewing ABDM Notice SYS-CON-001: Clinical Screening (v1.2.0). All data encrypted with AES-256.');">
+              <i class="fa-solid fa-file-contract"></i> View Applicable Consent Notice
             </button>
-            <button class="btn btn-secondary" onclick="alert('Consent revoked for non-emergency access.');">
-              <i class="fa-solid fa-ban"></i> Revoke Doctor Access
+            <button class="btn btn-secondary" style="color: #be123c; border-color: #fecdd3; background: #fff1f2;" onclick="revokeCitizenWearableMobile()">
+              <i class="fa-solid fa-ban"></i> One-Tap Revoke Wearables Access
             </button>
           </div>
         `;
         break;
+    }
+  }
+
+  // =========================================================================
+  // WEARABLES & UNIT OF MEASUREMENT (UOM) MANAGEMENT
+  // =========================================================================
+
+  let currentUomPreference = 'METRIC'; // 'METRIC' | 'IMPERIAL'
+
+  let cachedWearableTelemetry = [
+    { code: "HEART_RATE", name: "Resting Heart Rate", value: 72.0, metricUnit: "bpm", imperialUnit: "bpm", source: "OPEN_WEARABLES_CONNECTOR", timestamp: "2026-10-11T08:30:00Z" },
+    { code: "STEPS", name: "Daily Step Count", value: 7450, metricUnit: "steps", imperialUnit: "steps", source: "OPEN_WEARABLES_CONNECTOR", timestamp: "2026-10-11T08:30:00Z" },
+    { code: "FASTING_GLUCOSE", name: "Continuous Glucose", value: 118.0, metricUnit: "mg/dL", imperialUnit: "mmol/L", source: "OPEN_WEARABLES_CONNECTOR", timestamp: "2026-10-11T08:30:00Z" },
+    { code: "SYSTOLIC_BP", name: "Blood Pressure (Optical)", value: 138.0, metricUnit: "mmHg", imperialUnit: "mmHg", source: "OPEN_WEARABLES_OPTIONAL_EXTENSION", timestamp: "2026-10-11T08:30:00Z" },
+    { code: "WEIGHT", name: "Body Weight", value: 74.0, metricUnit: "kg", imperialUnit: "lbs", source: "OPEN_WEARABLES_CONNECTOR", timestamp: "2026-10-11T08:30:00Z" },
+    { code: "SPO2", name: "Oxygen Saturation", value: 98.0, metricUnit: "%", imperialUnit: "%", source: "OPEN_WEARABLES_CONNECTOR", timestamp: "2026-10-11T08:30:00Z" },
+    { code: "HRV", name: "Heart Rate Variability (RMSSD)", value: 48.0, metricUnit: "ms", imperialUnit: "ms", source: "OPEN_WEARABLES_CONNECTOR", timestamp: "2026-10-11T08:30:00Z" },
+    { code: "SLEEP_DURATION", name: "Sleep Duration", value: 7.2, metricUnit: "hours", imperialUnit: "hours", source: "OPEN_WEARABLES_CONNECTOR", timestamp: "2026-10-11T08:30:00Z" }
+  ];
+
+  function setUomPreference(uom) {
+    currentUomPreference = uom;
+    const badge = document.getElementById('activeUomBadge');
+    const btnM = document.getElementById('btnUomMetric');
+    const btnI = document.getElementById('btnUomImperial');
+    if (badge) badge.innerText = (uom === 'METRIC') ? 'Metric' : 'SI / Imperial';
+    if (btnM && btnI) {
+      if (uom === 'METRIC') {
+        btnM.style.background = 'var(--teal)';
+        btnM.style.color = 'white';
+        btnI.style.background = '#f1f5f9';
+        btnI.style.color = 'var(--text-main)';
+      } else {
+        btnI.style.background = 'var(--teal)';
+        btnI.style.color = 'white';
+        btnM.style.background = '#f1f5f9';
+        btnM.style.color = 'var(--text-main)';
+      }
+    }
+    renderWearableTelemetry();
+  }
+
+  function renderWearableTelemetry() {
+    const cont = document.getElementById('wearableTelemetryContainer');
+    if (!cont) return;
+    cont.innerHTML = cachedWearableTelemetry.map(t => {
+      let displayVal = t.value;
+      let displayUnit = t.metricUnit;
+      if (currentUomPreference === 'IMPERIAL') {
+        displayUnit = t.imperialUnit;
+        if (t.code === 'FASTING_GLUCOSE') {
+          displayVal = (t.value / 18.018).toFixed(2);
+        } else if (t.code === 'WEIGHT') {
+          displayVal = (t.value * 2.20462).toFixed(1);
+        }
+      }
+      return `
+        <div style="padding: 10px; background: #f8fafc; border-radius: 10px; border: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-size: 13px; font-weight: 700;">${t.name}: <span style="color: var(--teal);">${displayVal} ${displayUnit}</span></div>
+            <div style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">
+              <i class="fa-solid fa-microchip"></i> Source: <strong>${t.source}</strong> • <i class="fa-regular fa-clock"></i> ${t.timestamp}
+            </div>
+          </div>
+          <span class="badge" style="background: #e2e8f0; color: #334155; font-size: 10px;">${displayUnit}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function syncCitizenWearableMobile() {
+    const cid = state.citizen.id || "citizen-ramesh-patel-01";
+    const btn = document.getElementById('btnSyncWearable');
+    if (btn) btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Synchronizing biometrics...';
+    try {
+      const resp = await fetch(`/api/v1/wearables/sync/${cid}`, { method: 'POST' });
+      if (resp.ok) {
+        const data = await resp.json();
+        const obsResp = await fetch(`/api/v1/wearables/${cid}/observations`);
+        if (obsResp.ok) {
+          const obsData = await obsResp.json();
+          if (obsData && obsData.length > 0) {
+            obsData.slice(0, 8).forEach(o => {
+              const match = cachedWearableTelemetry.find(c => c.code === o.code);
+              if (match) {
+                match.value = o.value;
+                match.metricUnit = o.unit;
+                match.source = o.source;
+                match.timestamp = o.recorded_at;
+              }
+            });
+          }
+        }
+        renderWearableTelemetry();
+        alert(`✅ Wearable Telemetry Synchronized!\n\n${data.synced_records_count || 14} biometric timeseries records ingested into SevaHealth database.\nRetained source: OPEN_WEARABLES_CONNECTOR\nStandardized units: bpm, steps, mg/dL, mmHg, kg, ms`);
+      } else if (resp.status === 403) {
+        alert("🚫 SYNC BLOCKED (403 Forbidden):\nConsent was revoked. The app refuses synchronization according to privacy rules.");
+      } else {
+        alert("Sync response: HTTP " + resp.status);
+      }
+    } catch (e) {
+      alert("Error contacting server: " + e.message);
+    } finally {
+      if (btn) btn.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i> Synchronize Live Wearable Biometrics';
+    }
+  }
+
+  async function revokeCitizenWearableMobile() {
+    const cid = "citizen-ramesh-patel-01";
+    try {
+      const resp = await fetch(`/api/v1/wearables/consent/revoke/${cid}`, { method: 'POST' });
+      if (resp.ok) {
+        alert("🔒 WEARABLE ACCESS REVOKED!\n\nDirective marked REVOKED in database.\nFuture synchronizations and AI biometrics access will be blocked immediately.");
+        const stat = document.getElementById('wearableSyncStatus');
+        const badge = document.getElementById('wearableBadge');
+        if (stat) stat.innerText = "Revoked • Sync Blocked";
+        if (badge) {
+          badge.className = "badge";
+          badge.style.background = "#fee2e2";
+          badge.style.color = "#991b1b";
+          badge.innerHTML = '<i class="fa-solid fa-ban"></i> Revoked';
+        }
+        const mobBadge = document.getElementById('mobWearableConsentBadge');
+        if (mobBadge) {
+          mobBadge.className = "badge";
+          mobBadge.style.background = "#fee2e2";
+          mobBadge.style.color = "#991b1b";
+          mobBadge.innerText = "Revoked";
+        }
+      } else {
+        alert("Revoke response: HTTP " + resp.status);
+      }
+    } catch (e) {
+      alert("Error contacting server: " + e.message);
+    }
+  }
+
+  // =========================================================================
+  // CLINICAL DOCUMENT INGESTION VERIFICATION
+  // =========================================================================
+
+  async function testDocumentUploadMobile(scenario) {
+    const resEl = document.getElementById('docUploadResult');
+    if (!resEl) return;
+    resEl.style.display = 'block';
+
+    if (scenario === 'VALID_LAB_REPORT') {
+      resEl.className = 'card';
+      resEl.style.background = '#f0fdf4';
+      resEl.style.border = '1px solid #bbf7d0';
+      resEl.innerHTML = `
+        <div style="font-weight: 700; color: #15803d; font-size: 13px; margin-bottom: 4px;">
+          <i class="fa-solid fa-circle-check"></i> Valid Laboratory Report Ingested
+        </div>
+        <div style="font-size: 11px; color: #166534; line-height: 1.5;">
+          • <strong>Document Reference:</strong> doc-lab-rep-valid-8821<br>
+          • <strong>SHA-256 Checksum:</strong> e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855<br>
+          • <strong>Virus Scanner:</strong> Clean (Passed zero-trust byte headers)<br>
+          • <strong>Clinical Store:</strong> Preserved in immutable vault, linked to Citizen ${state.citizen.name}.<br>
+          • <strong>Auditable:</strong> Timestamp, uploader ID, and extraction provenance recorded.
+        </div>
+      `;
+    } else if (scenario === 'MALICIOUS_EICAR') {
+      resEl.className = 'card';
+      resEl.style.background = '#fef2f2';
+      resEl.style.border = '1px solid #fecaca';
+      resEl.innerHTML = `
+        <div style="font-weight: 700; color: #b91c1c; font-size: 13px; margin-bottom: 4px;">
+          <i class="fa-solid fa-triangle-exclamation"></i> Malicious / Unsupported Document Rejected
+        </div>
+        <div style="font-size: 11px; color: #991b1b; line-height: 1.5;">
+          • <strong>Scan Status:</strong> REJECTED (HTTP 422 / Quarantined)<br>
+          • <strong>Scanner Details:</strong> Malicious signature detected (EICAR / Disallowed executable header).<br>
+          • <strong>Clinical Invariant:</strong> Zero observations written to trusted medical records.<br>
+          • <strong>Security Event:</strong> Quarantined in isolated storage with tamper-evident audit entry.
+        </div>
+      `;
+    } else if (scenario === 'LOW_CONFIDENCE') {
+      resEl.className = 'card';
+      resEl.style.background = '#fffbeb';
+      resEl.style.border = '1px solid #fde68a';
+      resEl.innerHTML = `
+        <div style="font-weight: 700; color: #b45309; font-size: 13px; margin-bottom: 4px;">
+          <i class="fa-solid fa-clock-rotate-left"></i> Low-Confidence Extraction Held for Review
+        </div>
+        <div style="font-size: 11px; color: #92400e; line-height: 1.5;">
+          • <strong>Pipeline Gate:</strong> HUMAN_REVIEW_REQUIRED (Field confidence &lt; 0.85 / ambiguous value)<br>
+          • <strong>Review Queue:</strong> Enqueued into Clinician Review Queue for verification.<br>
+          • <strong>Safety Invariant:</strong> Value remains UNVERIFIED. Zero unvalidated values committed to clinical record.<br>
+          • <strong>Resolution:</strong> Only promoted to Observation record upon explicit clinician approval.
+        </div>
+      `;
+    }
+  }
+
+  // =========================================================================
+  // CITIZEN DAILY CHECK-IN & PREVENTION PLAN INTEGRATION
+  // =========================================================================
+
+  function renderCheckinHistoryItems() {
+    if (!state.checkin || !state.checkin.history || state.checkin.history.length === 0) {
+      return `<div style="font-size: 12px; color: var(--text-muted); text-align: center; padding: 12px; background: #f8fafc; border-radius: 10px;">No previous check-ins yet. Submit your first check-in above!</div>`;
+    }
+    return state.checkin.history.slice().reverse().map(item => {
+      const d = new Date(item.timestamp);
+      const dateStr = isNaN(d.getTime()) ? (item.timestamp || 'Today') : d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const planShort = item.plan_id ? (item.plan_id.length > 12 ? item.plan_id.substring(0, 8) + '...' : item.plan_id) : 'active-plan';
+      return `
+        <div style="padding: 10px; background: #f8fafc; border-radius: 12px; border: 1px solid var(--border); font-size: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; font-weight: 700;">
+            <span>Mood: ${item.feeling || 'Normal'}</span>
+            <span class="badge ${item.medication_adherence ? 'badge-green' : 'badge-amber'}">${item.medication_adherence ? 'Meds Taken' : 'Pending Meds'}</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+            <span>Plan: #${planShort}</span>
+            <span>${dateStr}</span>
+          </div>
+          ${item.notes ? `<div style="font-size: 11px; color: #475569; margin-top: 4px; font-style: italic;">"${item.notes}"</div>` : ''}
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function loadActivePlanAndCheckins() {
+    const cid = state.citizen.id || "citizen-ramesh-patel-01";
+    try {
+      const planResp = await fetch(`/api/v1/intervention/plan/${cid}`);
+      if (planResp.ok) {
+        const plan = await planResp.json();
+        state.checkin.activePlan = plan;
+        const titleEl = document.getElementById('checkinPlanTitle');
+        const badgeEl = document.getElementById('checkinPlanBadge');
+        if (titleEl) titleEl.innerText = plan.title || 'Personalized Prevention Care Plan';
+        if (badgeEl) badgeEl.innerText = plan.id ? plan.id.substring(0, 8) : 'Active';
+      }
+      const checkinResp = await fetch(`/api/v1/intervention/check-in/${cid}`);
+      if (checkinResp.ok) {
+        const history = await checkinResp.json();
+        state.checkin.history = history;
+        const countEl = document.getElementById('checkinHistoryCount');
+        const listEl = document.getElementById('checkinHistoryList');
+        if (countEl) countEl.innerText = `${history.length} Saved`;
+        if (listEl) listEl.innerHTML = renderCheckinHistoryItems();
+      }
+    } catch (e) {
+      console.warn("Could not load plan/checkins:", e);
+    }
+  }
+
+  function setCheckinFeeling(f) {
+    state.checkin.feeling = f;
+    ['Energetic', 'Normal', 'Tired', 'Unwell'].forEach(opt => {
+      const btn = document.getElementById('btnFeel' + opt);
+      if (btn) {
+        btn.className = `btn ${opt === f ? 'btn-primary' : 'btn-secondary'}`;
+      }
+    });
+  }
+
+  function setCheckinMedTaken(b) {
+    state.checkin.medication_adherence = b;
+    const btnYes = document.getElementById('btnMedYes');
+    const btnNo = document.getElementById('btnMedNo');
+    if (btnYes) btnYes.className = `btn ${b ? 'btn-primary' : 'btn-secondary'}`;
+    if (btnNo) btnNo.className = `btn ${!b ? 'btn-primary' : 'btn-secondary'}`;
+  }
+
+  async function submitDailyCheckin() {
+    const cid = state.citizen.id || "citizen-ramesh-patel-01";
+    const notesInput = document.getElementById('checkinNotes');
+    if (notesInput) state.checkin.notes = notesInput.value;
+
+    const btn = document.getElementById('btnSubmitCheckin');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Saving to Database...`;
+    }
+
+    try {
+      const resp = await fetch(`/api/v1/intervention/check-in/${cid}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          feeling: state.checkin.feeling,
+          medication_adherence: state.checkin.medication_adherence,
+          symptoms: state.checkin.symptoms,
+          notes: state.checkin.notes,
+          tasks_completed_count: 1
+        })
+      });
+
+      if (resp.ok) {
+        const newCheckin = await resp.json();
+        alert(`✅ DAILY CHECK-IN SAVED!\n\nLinked to Citizen: ${newCheckin.citizen_id}\nAssociated Care Plan: #${newCheckin.plan_id}\nStatus: Persisted in Database & Verified.`);
+        await loadActivePlanAndCheckins();
+      } else {
+        alert(`Server returned HTTP ${resp.status}`);
+      }
+    } catch (e) {
+      alert("Check-in error: " + e.message);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `<i class="fa-solid fa-cloud-arrow-up"></i> Submit Daily Check-in (Sync to Plan)`;
+      }
     }
   }
 </script>

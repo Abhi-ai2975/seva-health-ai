@@ -72,17 +72,65 @@ def export_observation_fhir_r4(obs: Observation) -> Dict[str, Any]:
 
 
 def export_risk_assessment_fhir_r4(risk: RiskAssessment) -> Dict[str, Any]:
-    """Serializes a RiskAssessment into an HL7 FHIR R4 RiskAssessment Resource."""
-    return {
+    """Serializes a RiskAssessment into an HL7 FHIR R4 RiskAssessment Resource
+    with ABDM-aligned validation tagging and demonstration-only labelling (TC-RSK-003).
+    """
+    is_demo = getattr(risk, "is_demonstration_only", False) or not getattr(risk, "is_clinically_validated", True)
+
+    tags = []
+    extensions = []
+    notes = []
+
+    if is_demo:
+        tags.append({
+            "system": "https://sevahealth.ai/clinical-validation",
+            "code": "DEMONSTRATION_ONLY",
+            "display": "DEMONSTRATION ONLY - NOT CLINICALLY VALIDATED"
+        })
+        extensions.extend([
+            {
+                "url": "https://sevahealth.ai/fhir/StructureDefinition/demonstration-only",
+                "valueBoolean": True
+            },
+            {
+                "url": "https://sevahealth.ai/fhir/StructureDefinition/clinical-validation-status",
+                "valueString": "DEMONSTRATION_ONLY_NOT_CLINICALLY_VALIDATED"
+            }
+        ])
+        warning_msg = (
+            getattr(risk, "demonstration_warning", None)
+            or "⚠️ DEMONSTRATION ONLY: This model is an unvalidated demonstration proxy for research and testing. NOT CLINICALLY VALIDATED for diagnostic or therapeutic decisions."
+        )
+        notes.append({"text": warning_msg})
+    else:
+        tags.append({
+            "system": "https://sevahealth.ai/clinical-validation",
+            "code": "CLINICALLY_VALIDATED",
+            "display": "Clinically Validated Population Screening Guideline"
+        })
+        extensions.append({
+            "url": "https://sevahealth.ai/fhir/StructureDefinition/demonstration-only",
+            "valueBoolean": False
+        })
+
+    notes.append({"text": risk.safety_disclaimer})
+
+    score_val = round(risk.overall_score, 4) if risk.overall_score is not None else None
+
+    resource: Dict[str, Any] = {
         "resourceType": "RiskAssessment",
         "id": risk.id,
+        "meta": {
+            "tag": tags
+        },
+        "extension": extensions,
         "status": "final",
         "subject": {
             "reference": f"Patient/{risk.citizen_id}"
         },
         "occurrenceDateTime": risk.evaluated_at.isoformat(),
         "prediction": [{
-            "probabilityDecimal": round(risk.overall_score, 4),
+            "probabilityDecimal": score_val,
             "qualitativeRisk": {
                 "coding": [{
                     "system": "https://sevahealth.ai/risk-tier",
@@ -92,7 +140,7 @@ def export_risk_assessment_fhir_r4(risk: RiskAssessment) -> Dict[str, Any]:
             },
             "rationale": risk.clinical_summary
         }],
-        "note": [{
-            "text": risk.safety_disclaimer
-        }]
+        "note": notes
     }
+
+    return resource

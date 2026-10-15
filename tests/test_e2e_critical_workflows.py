@@ -158,7 +158,7 @@ class TestCriticalWorkflowsE2E:
 
     def test_workflow_04_risk_assessment(self):
         """Workflow 4: AI Multi-Domain NCD Risk Engine stratification."""
-        resp = client.post(f"/api/v1/risk/evaluate/{TestCriticalWorkflowsE2E.citizen_id}")
+        resp = client.post(f"/api/v1/risk/evaluate/{TestCriticalWorkflowsE2E.citizen_id}", headers=self.auth_headers)
         assert resp.status_code == 200, f"Risk eval failed: {resp.text}"
         risk = resp.json()
 
@@ -193,7 +193,7 @@ class TestCriticalWorkflowsE2E:
 
     def test_workflow_06_prevention_plan_synthesis(self):
         """Workflow 6: Personalized 30-day lifestyle medicine care plan."""
-        resp = client.get(f"/api/v1/intervention/plan/{TestCriticalWorkflowsE2E.citizen_id}")
+        resp = client.get(f"/api/v1/intervention/plan/{TestCriticalWorkflowsE2E.citizen_id}", headers=self.auth_headers)
         assert resp.status_code == 200, f"Care plan failed: {resp.text}"
         plan = resp.json()
 
@@ -337,7 +337,7 @@ class TestCriticalWorkflowsE2E:
         assert resp.status_code == 200, f"Follow-up screening failed: {resp.text}"
 
         # Re-evaluate Risk Engine
-        resp_risk = client.post(f"/api/v1/risk/evaluate/{TestCriticalWorkflowsE2E.citizen_id}")
+        resp_risk = client.post(f"/api/v1/risk/evaluate/{TestCriticalWorkflowsE2E.citizen_id}", headers=self.auth_headers)
         assert resp_risk.status_code == 200
         new_risk = resp_risk.json()
 

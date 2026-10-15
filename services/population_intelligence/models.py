@@ -28,6 +28,12 @@ class PopulationOverviewResponse(BaseModel):
         "CONFIDENTIAL & DE-IDENTIFIED: Minimum aggregation threshold k >= 10 enforced. "
         "No individual patient PII is accessible through this dashboard."
     )
+    is_simulated: bool = True
+    data_provenance: str = "SYNTHETIC_DEMONSTRATION_DATA"
+    provenance_disclaimer: str = (
+        "DEMONSTRATION ONLY: Synthetic cohort data generated for evaluation and training. "
+        "Not representative of actual clinical or community outcomes."
+    )
 
 
 class RiskDistributionDomain(BaseModel):
@@ -37,14 +43,22 @@ class RiskDistributionDomain(BaseModel):
     moderate_count: int
     high_count: int
     critical_count: int
+    insufficient_data_count: int = 0
     leading_risk_driver: str
 
 
 class RiskDistributionResponse(BaseModel):
     total_screened: int
     overall_tiers: Dict[str, int]
+    insufficient_data_count: int = 0
     domains: List[RiskDistributionDomain]
     demographic_cross_tabulation: Dict[str, Any]
+    is_simulated: bool = True
+    data_provenance: str = "SYNTHETIC_DEMONSTRATION_DATA"
+    provenance_disclaimer: str = (
+        "DEMONSTRATION ONLY: Synthetic cohort data generated for evaluation and training. "
+        "Not representative of actual clinical or community outcomes."
+    )
 
 
 class TimeTrendPoint(BaseModel):
@@ -61,6 +75,12 @@ class RiskTrendsResponse(BaseModel):
     reporting_window: str = "Last 6 Months (Longitudinal)"
     monthly_trends: List[TimeTrendPoint]
     key_findings: List[str]
+    is_simulated: bool = True
+    data_provenance: str = "SYNTHETIC_DEMONSTRATION_DATA"
+    provenance_disclaimer: str = (
+        "DEMONSTRATION ONLY: Synthetic cohort data generated for evaluation and training. "
+        "Not representative of actual clinical or community outcomes."
+    )
 
 
 class HighRiskCohortItem(BaseModel):
@@ -80,6 +100,12 @@ class HighRiskCohortsResponse(BaseModel):
     k_anonymity_threshold: int = 10
     cohorts: List[HighRiskCohortItem]
     targeted_action_recommendations: List[str]
+    is_simulated: bool = True
+    data_provenance: str = "SYNTHETIC_DEMONSTRATION_DATA"
+    provenance_disclaimer: str = (
+        "DEMONSTRATION ONLY: Synthetic cohort data generated for evaluation and training. "
+        "Not representative of actual clinical or community outcomes."
+    )
 
 
 class InterventionOutcomesResponse(BaseModel):
@@ -143,6 +169,7 @@ class DeidentifiedExportRow(BaseModel):
     bmi_category: str
     care_plan_enrolled: bool
     adherence_tier: str
+    data_provenance: str = "SYNTHETIC_DEMONSTRATION_DATA"
 
 
 class DeidentifiedExportResponse(BaseModel):
@@ -151,3 +178,58 @@ class DeidentifiedExportResponse(BaseModel):
     deidentification_method: str = "Salted SHA-256 Pseudonymization + 5-Year Age Banding + Binning"
     k_anonymity_guarantee: str = "k >= 10"
     records: List[DeidentifiedExportRow]
+    is_simulated: bool = True
+    data_provenance: str = "SYNTHETIC_DEMONSTRATION_DATA"
+    provenance_disclaimer: str = (
+        "DEMONSTRATION ONLY: Synthetic cohort data generated for evaluation and training. "
+        "Not representative of actual clinical or community outcomes."
+    )
+
+
+class DemographicBreakdownResponse(BaseModel):
+    program: Optional[str] = None
+    district: Optional[str] = None
+    dimension: str
+    total_in_scope: int
+    breakdown: Dict[str, Any]
+    suppressed_cells_count: int
+    k_anonymity_threshold: int = 10
+    is_simulated: bool = True
+    data_provenance: str = "SYNTHETIC_DEMONSTRATION_DATA"
+    provenance_disclaimer: str = (
+        "DEMONSTRATION ONLY: Synthetic cohort data generated for evaluation and training. "
+        "Not representative of actual clinical or community outcomes."
+    )
+
+
+class SeedCohortCitizen(BaseModel):
+    id: str
+    name: str
+    age: int
+    gender: str
+    district: str
+    program_id: str
+    screening_status: Optional[str] = "COMPLETED"  # COMPLETED | DRAFT | CANCELLED
+    risk_tier: Optional[str] = "LOW"               # LOW | MODERATE | HIGH | CRITICAL | INSUFFICIENT_DATA
+    has_complete_data: bool = True
+    observations: Optional[Dict[str, Any]] = None
+
+
+class SeedCohortRequest(BaseModel):
+    program_id: str
+    program_name: str
+    district: str
+    citizens: List[SeedCohortCitizen]
+
+
+class SeedCohortResponse(BaseModel):
+    program_id: str
+    seeded_citizens_count: int
+    seeded_completed_screenings: int
+    seeded_draft_screenings: int
+    risk_category_counts: Dict[str, int]
+    insufficient_data_count: int = 0
+    message: str
+    is_simulated: bool = True
+    data_provenance: str = "SYNTHETIC_DEMONSTRATION_DATA"
+

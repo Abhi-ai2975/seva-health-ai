@@ -21,6 +21,22 @@ from packages.security.encryption import (
     EncryptionError,
     field_encryption,
 )
+from packages.security.sql_guard import (
+    SQLInjectionDetector,
+    SQLInjectionViolationError,
+    SafeQueryExecutor,
+)
+from packages.security.xss_guard import (
+    XSSDetector,
+    XSSSanitizer,
+    SafeDOMRenderer,
+    XSSViolationError,
+)
+from packages.security.path_traversal_guard import (
+    PathTraversalDetector,
+    StorageVaultManager,
+    PathTraversalViolationError,
+)
 
 __all__ = [
     "SecureHeadersMiddleware",
@@ -36,4 +52,15 @@ __all__ = [
     "AESGCMFieldEncryption",
     "EncryptionError",
     "field_encryption",
+    "SQLInjectionDetector",
+    "SQLInjectionViolationError",
+    "SafeQueryExecutor",
+    "XSSDetector",
+    "XSSSanitizer",
+    "SafeDOMRenderer",
+    "XSSViolationError",
+    "PathTraversalDetector",
+    "StorageVaultManager",
+    "PathTraversalViolationError",
 ]
+

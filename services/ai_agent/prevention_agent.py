@@ -25,6 +25,7 @@ from packages.ai_schemas.safety import (
 from packages.clinical_models.consent import ConsentCategory, consent_manager
 from packages.interop.security import AntiArbitraryQueryGuard, ArbitraryQueryViolationError
 from services.ai_agent.safety import ClinicalSafetyEngine, ClinicalSafetyEnforcer
+from services.ai_agent.provider import is_ai_provider_enabled, AIServiceUnavailableError
 import time
 from packages.observability.context import SpanStage
 from packages.observability.tracer import tracer
@@ -45,6 +46,7 @@ from services.ai_agent.tools import (
     create_alert,
     request_clinician_review,
 )
+from services.store import store
 
 
 class PreventionAgentResponse(BaseModel):
@@ -85,14 +87,26 @@ class SevaHealthPreventionAgent:
         r"\bbp\s+above\s+180\b",
     ]
 
-    # Medication inquiry patterns
-    MEDICATION_QUERY_PATTERNS = [
-        r"\bstop\b.*?\b(?:medication|medicine|metformin|amlodipine|telmisartan|pills|drugs)\b",
-        r"\b(?:change|increase|decrease|double|halve)\b.*?\b(?:dose|dosage|medication|medicine|metformin|amlodipine|telmisartan|pills)\b",
+    # Medication alteration / discontinuation / prescribing patterns
+    MEDICATION_ALTERATION_PATTERNS = [
+        r"\b(?:stop|discontinue|quit|cease|halt|drop|cancel)\b.*?\b(?:medication|medicine|metformin|amlodipine|telmisartan|pills|drugs|tablets|dose|dosage|prescription|treatment)\b",
+        r"\b(?:change|increase|decrease|double|halve|adjust|switch|alter)\b.*?\b(?:dose|dosage|medication|medicine|metformin|amlodipine|telmisartan|pills|drugs|tablets)\b",
         r"\bprescribe\b",
         r"\bwhat\s+(?:medicine|drug|pill|medication)\s+should\s+i\s+take\b",
-        r"\bcan\s+i\s+(?:take\s+more|take\s+less|stop\s+taking|double|cut)\b",
-        r"\bshould\s+i\s+(?:take\s+more|take\s+less|stop\s+taking|double|cut)\b",
+        r"\bcan\s+i\s+(?:take\s+more|take\s+less|stop\s+taking|double|cut|change|discontinue)\b",
+        r"\bshould\s+i\s+(?:take\s+more|take\s+less|stop\s+taking|double|cut|change|discontinue)\b",
+        r"\bdiscontinue\b",
+        r"\bstop\s+(?:taking|my)\b",
+    ]
+
+    # Medication inquiry / summary patterns (read-only patient query)
+    MEDICATION_SUMMARY_PATTERNS = [
+        r"\b(?:summarize|summary\s+of|list|what\s+are|tell\s+me\s+about|show|do\s+i\s+have\s+any)\b.*?\b(?:medication|medicine|medications|medicines|pills|drugs|prescriptions|prescribed|rx)\b",
+        r"\bwhat\s+medications\s+(?:am\s+i\s+taking|are\s+prescribed|do\s+i\s+have)\b",
+        r"\bmedication\s+(?:history|profile|record|records|summary|list)\b",
+        r"\bwhat\s+(?:pills|medicines)\s+am\s+i\s+taking\b",
+        r"\bcurrent\s+medications?\b",
+        r"\bactive\s+prescriptions?\b",
     ]
 
     @classmethod
@@ -100,8 +114,16 @@ class SevaHealthPreventionAgent:
         return any(re.search(pat, text, re.IGNORECASE) for pat in cls.EMERGENCY_PATTERNS)
 
     @classmethod
+    def _is_medication_alteration_query(cls, text: str) -> bool:
+        return any(re.search(pat, text, re.IGNORECASE) for pat in cls.MEDICATION_ALTERATION_PATTERNS)
+
+    @classmethod
+    def _is_medication_summary_query(cls, text: str) -> bool:
+        return any(re.search(pat, text, re.IGNORECASE) for pat in cls.MEDICATION_SUMMARY_PATTERNS)
+
+    @classmethod
     def _is_medication_query(cls, text: str) -> bool:
-        return any(re.search(pat, text, re.IGNORECASE) for pat in cls.MEDICATION_QUERY_PATTERNS)
+        return cls._is_medication_alteration_query(text)
 
     @classmethod
     def _detect_missing_data(
@@ -160,6 +182,82 @@ class SevaHealthPreventionAgent:
                 uncertainty="Consent not active for AI Processing.",
                 recommended_action="Visit Citizen Privacy Center to manage your healthcare consents.",
                 escalation=False,
+                safety_banners=[SafetyBanner.PROFESSIONAL_REVIEW.value],
+                language=language,
+            )
+
+        # Check AI Provider Availability (TC-AI-006)
+        if not is_ai_provider_enabled():
+            return PreventionAgentResponse(
+                answer=(
+                    "AI Health Assistant Service Temporarily Offline (TC-AI-006):\n\n"
+                    "The generative AI explanation service is currently disabled or undergoing maintenance. "
+                    "However, your underlying clinical risk calculations, deterministic screening models, "
+                    "and active 30-day prevention care plan remain fully available, validated, and unaffected.\n\n"
+                    "Please check your primary care screening dashboard or consult your healthcare worker."
+                ),
+                evidence=["Deterministic risk assessment engine remains fully operational."],
+                uncertainty="AI generation provider is currently disabled; fallback state engaged.",
+                recommended_action="View your deterministic screening metrics or consult your PHC care team.",
+                escalation=False,
+                safety_banners=[SafetyBanner.PROFESSIONAL_REVIEW.value],
+                language=language,
+            )
+
+        # Check for Prompt Injection / Adversarial Instructions (TC-AI-004)
+        injection_detected = ClinicalSafetyEngine.check_prompt_injection(user_query)
+        if injection_detected:
+            agent_telemetry.log_decision(
+                agent_name="SevaHealthPreventionAgent",
+                citizen_id=citizen_id,
+                actor_id=actor.sub,
+                user_query=user_query,
+                decision="PROMPT_INJECTION_REJECTED",
+                escalation=False,
+                evidence_count=0,
+            )
+            return PreventionAgentResponse(
+                answer=(
+                    "SECURITY & CLINICAL SAFETY ALERT (TC-AI-004):\n\n"
+                    "Untrusted or adversarial instructions were detected in your request. "
+                    "System policies, access controls, and clinical safety guardrails cannot be overridden. "
+                    "Unauthorized disclosure of protected health information, private credentials, or unapproved prescriptions is strictly denied.\n\n"
+                    "Please submit a valid clinical or lifestyle question."
+                ),
+                evidence=[],
+                uncertainty="Adversarial prompt injection pattern identified and neutralized.",
+                recommended_action="Adhere to standard preventive health queries.",
+                escalation=False,
+                tool_calls_executed=[],
+                safety_banners=[SafetyBanner.PROFESSIONAL_REVIEW.value],
+                language=language,
+            )
+
+        # Check for Unsupported Medical Diagnostic Questions (TC-AI-007)
+        if ClinicalSafetyEngine.is_unsupported_diagnostic_query(user_query):
+            agent_telemetry.log_decision(
+                agent_name="SevaHealthPreventionAgent",
+                citizen_id=citizen_id,
+                actor_id=actor.sub,
+                user_query=user_query,
+                decision="UNSUPPORTED_DIAGNOSTIC_QUERY_ACKNOWLEDGED",
+                escalation=False,
+                evidence_count=0,
+            )
+            return PreventionAgentResponse(
+                answer=(
+                    "Medical Information Unavailable / Unsupported Diagnostic Query (TC-AI-007):\n\n"
+                    "The specialized medical diagnostic information you asked about (e.g., MRI, CT scan, biopsy, genetic sequencing, or advanced pathology) "
+                    "is not available or recorded in your SevaHealth electronic primary care profile.\n\n"
+                    "As an AI Preventive Health Assistant, I strictly report documented clinical data and will NOT fabricate medical facts, "
+                    "imaging findings, or diagnostic test results.\n\n"
+                    "Please contact the hospital or diagnostic laboratory where the investigation was performed, or discuss this test directly with your consulting specialist."
+                ),
+                evidence=["Requested diagnostic modality not present in primary care dataset."],
+                uncertainty="Specialized medical records unavailable in system; AI acknowledges uncertainty and does not fabricate findings.",
+                recommended_action="Obtain official diagnostic report from the testing facility or consult your physician.",
+                escalation=False,
+                citations=["National Digital Health Mission (NDHM) Record Sharing Standards"],
                 safety_banners=[SafetyBanner.PROFESSIONAL_REVIEW.value],
                 language=language,
             )
@@ -266,9 +364,9 @@ class SevaHealthPreventionAgent:
             )
             return resp
 
-        # 2. Check for Prescribing / Medication Modification Requests
-        if self._is_medication_query(user_query):
-            # Fetch current medications to ground response
+        # 2. Check for Prescribing / Medication Modification Requests (TC-AI-003)
+        if self._is_medication_alteration_query(user_query):
+            # Fetch current medications to ground response (read-only verification)
             meds = []
             try:
                 meds = get_medication_list(citizen_id=citizen_id, actor=actor)
@@ -285,7 +383,8 @@ class SevaHealthPreventionAgent:
                 "IMPORTANT CLINICAL SAFETY NOTICE: As an AI Preventive Health Assistant, I am strictly prohibited "
                 "from prescribing medications, altering dosages, or advising you to discontinue any prescribed drugs.\n\n"
                 "Pharmacotherapy must only be adjusted by a qualified physician. Never discontinue or adjust your dose "
-                "without direct clinician consultation, as abrupt discontinuation can lead to severe rebound hypertension or glycemic spikes."
+                "without direct clinician consultation, as abrupt discontinuation can lead to severe rebound hypertension or glycemic spikes.\n\n"
+                "Please consult your treating clinician at your Primary Health Centre (PHC) to review your prescription safely."
             )
 
             if language == "kn":
@@ -312,6 +411,7 @@ class SevaHealthPreventionAgent:
                 citations=citations_list,
                 tool_calls_executed=executed_tools,
                 language=language,
+                safety_banners=[SafetyBanner.PROFESSIONAL_REVIEW.value],
             )
 
             agent_telemetry.log_decision(
@@ -322,6 +422,67 @@ class SevaHealthPreventionAgent:
                 decision="MEDICATION_PRESCRIBING_REJECTED",
                 escalation=False,
                 evidence_count=len(resp.evidence),
+            )
+            return resp
+
+        # 2b. Check for Medication Inquiry / Summary Requests (TC-AI-002)
+        if self._is_medication_summary_query(user_query):
+            meds = []
+            try:
+                meds = get_medication_list(citizen_id=citizen_id, actor=actor)
+                executed_tools.append("get_medication_list")
+            except Exception:
+                pass
+
+            if not meds:
+                med_summary_text = (
+                    "Medication Information Unavailable / Not Recorded:\n\n"
+                    "There are currently no active medications or prescription records documented in your electronic health profile. "
+                    "As an AI Preventive Health Assistant, I strictly report documented clinical data and will NOT fabricate or invent medications.\n\n"
+                    "If you are currently taking any prescribed medications, over-the-counter drugs, or traditional remedies that are not documented here, "
+                    "please inform your ASHA worker or treating clinician at your next health checkup so they can be registered in your official record."
+                )
+                uncertainty_text = "No pharmacological history recorded in citizen electronic health record. No data fabricated."
+                evidence_list.append("Medication records: None recorded / unavailable")
+                action_text = "Report any current medications to your healthcare provider for entry into your health record."
+            else:
+                med_items = "\n".join([
+                    f"• {m.get('drug_name')} - Dosage: {m.get('dosage')}, Frequency: {m.get('frequency') or 'As directed'}, Indication: {m.get('indication') or 'Not specified'}"
+                    for m in meds
+                ])
+                med_summary_text = (
+                    f"Here is your documented active medication regimen:\n\n"
+                    f"{med_items}\n\n"
+                    "Reminder: Always take medications as directed by your prescribing physician. "
+                    "Do not alter doses or discontinue without consulting your doctor."
+                )
+                uncertainty_text = "Medication list reflects current electronic health records on file."
+                evidence_list.append(f"Recorded medications ({len(meds)} items): " + ", ".join([m.get("drug_name", "") for m in meds]))
+                action_text = "Maintain adherence as prescribed and consult your doctor for any questions."
+
+            citations_list.append("National Medical Commission (NMC) Telemedicine Practice Guidelines")
+            citations_list.append("EHR Documentation Standards for Primary Health Care")
+
+            resp = PreventionAgentResponse(
+                answer=med_summary_text,
+                evidence=evidence_list,
+                uncertainty=uncertainty_text,
+                recommended_action=action_text,
+                escalation=False,
+                citations=citations_list,
+                tool_calls_executed=executed_tools,
+                language=language,
+                safety_banners=[SafetyBanner.PROFESSIONAL_REVIEW.value],
+            )
+
+            agent_telemetry.log_decision(
+                agent_name="SevaHealthPreventionAgent",
+                citizen_id=citizen_id,
+                actor_id=actor.sub,
+                user_query=user_query,
+                decision="MEDICATION_SUMMARY_PROVIDED",
+                escalation=False,
+                evidence_count=len(evidence_list),
             )
             return resp
 
@@ -344,8 +505,15 @@ class SevaHealthPreventionAgent:
         care_plan = get_intervention_plan(citizen_id=citizen_id, actor=actor)
         executed_tools.append("get_intervention_plan")
 
-        wearables = get_wearable_summary(citizen_id=citizen_id, actor=actor)
-        executed_tools.append("get_wearable_summary")
+        try:
+            wearables = get_wearable_summary(citizen_id=citizen_id, actor=actor)
+            executed_tools.append("get_wearable_summary")
+        except PermissionError as pe:
+            wearables = {
+                "connection_status": "REVOKED",
+                "message": str(pe),
+                "seven_day_baselines": {},
+            }
 
         # Compile evidence list from retrieved data
         citizen_name = profile.get("name", "Citizen")
@@ -368,10 +536,26 @@ class SevaHealthPreventionAgent:
         evidence_list.append(f"Stratified Risk Tier: {overall_tier} ({int(overall_score * 100)}%)")
 
         trend = trajectory.get("overall_trend", "STABLE")
-        evidence_list.append(f"Longitudinal Trajectory Trend: {trend} (Change: {trajectory.get('change_percentage', 0.0)}%)")
-
         # 4. Formulate Response based on Query Intent
         q_lower = user_query.lower()
+
+        # Specific check for revoked wearable consent queries (TC-CON-002)
+        if re.search(r"\b(?:wearable|smartwatch|steps|resting heart rate|garmin|fitbit)\b", q_lower) and wearables.get("connection_status") == "REVOKED":
+            return PreventionAgentResponse(
+                answer=(
+                    "CONSENT RESTRICTION (TC-CON-002):\n\n"
+                    "Wearable biometric telemetry access has been REVOKED by citizen directive in your Citizen Privacy Center. "
+                    "The AI assistant is strictly prohibited from accessing, evaluating, or disclosing your smartwatch biometrics or timeseries data.\n\n"
+                    "To re-enable smartwatch telemetry analysis, please restore wearable consent in your Citizen Privacy Center."
+                ),
+                evidence=["Wearable telemetry access directive: REVOKED."],
+                uncertainty="Wearable data inaccessible due to active citizen consent revocation.",
+                recommended_action="Manage your data streams in the Citizen Privacy Center if you wish to re-enable continuous biometrics.",
+                escalation=False,
+                tool_calls_executed=executed_tools,
+                safety_banners=[SafetyBanner.PROFESSIONAL_REVIEW.value],
+                language=language,
+            )
 
         # Intent A: Care Plan & Lifestyle Prevention Guidance
         if any(w in q_lower for w in ["diet", "food", "eat", "millet", "nutrition", "exercise", "walk", "sleep", "stress", "plan", "tasks", "goal", "adherence", "lifestyle"]):
@@ -460,6 +644,20 @@ class SevaHealthPreventionAgent:
                 for d in drivers_list
             ])
 
+            if not drivers_str:
+                obs_factors = []
+                if "systolic_bp" in vitals:
+                    sbp_val = vitals["systolic_bp"]["value"]
+                    dbp_val = vitals.get("diastolic_bp", {}).get("value", 80)
+                    obs_factors.append(f"• Systolic/Diastolic Blood Pressure: Observed {sbp_val}/{dbp_val} mmHg (Target: < 120/80 mmHg)")
+                if "fasting_glucose" in labs:
+                    obs_factors.append(f"• Fasting Blood Glucose: Observed {labs['fasting_glucose']['value']} mg/dL (Target: 70-100 mg/dL)")
+                if "hba1c" in labs:
+                    obs_factors.append(f"• HbA1c: Observed {labs['hba1c']['value']}% (Target: < 5.7%)")
+                if "bmi" in vitals:
+                    obs_factors.append(f"• Body Mass Index (BMI): Observed {vitals['bmi']['value']} kg/m² (Target: 18.5-22.9 kg/m²)")
+                drivers_str = "\n".join(obs_factors) if obs_factors else "• Routine biometric monitoring"
+
             if language == "kn":
                 answer_body = (
                     f"ನಿಮ್ಮ ಒಟ್ಟು ಎನ್‌ಸಿಡಿ ಅಪಾಯದ ವರ್ಗ: **{overall_tier}** ({int(overall_score * 100)}%).\n\n"
@@ -478,10 +676,12 @@ class SevaHealthPreventionAgent:
                 action_text = "डॉक्टर से परामर्श लें और निवारक योजना का पालन करें।"
             else:
                 clinical_rec = "\n\nClinical review recommended: High risk stratification warrants clinician evaluation." if overall_tier in ["HIGH", "ELEVATED"] or overall_score >= 0.6 else ""
+                non_diagnostic_notice = "This is a preventive risk assessment, not a clinical diagnosis. It reflects physiological patterns that warrant preventive attention."
                 answer_body = (
                     f"Based on your recent preventive screening, your composite NCD risk is classified as **{overall_tier}** ({int(overall_score * 100)}%).\n\n"
                     f"Top Contributing Biometric Factors:\n{drivers_str}\n\n"
-                    f"This screening score highlights early physiological markers where targeted lifestyle adjustments can prevent progression.{clinical_rec}"
+                    f"This screening score highlights early physiological markers where targeted lifestyle adjustments can prevent progression.{clinical_rec}\n\n"
+                    f"Important Notice: {non_diagnostic_notice}"
                 )
                 uncertainty_text = "Risk stratification is an early warning model, not a medical diagnosis."
                 action_text = "Discuss these screening observations with your clinician during your next visit."
@@ -552,6 +752,9 @@ class SevaHealthPreventionAgent:
             agent_version="v1.0.0",
         )
 
+        if safety_eval.limitations and "Limitations:" not in uncertainty_text:
+            uncertainty_text += " Limitations: " + "; ".join(safety_eval.limitations)
+
         resp = PreventionAgentResponse(
             answer=safety_eval.sanitized_response or answer_body,
             evidence=evidence_list,
@@ -600,6 +803,22 @@ class SevaHealthPreventionAgent:
         actor: TokenPayload,
     ) -> LLMSOAPSummaryOutput:
         """Synthesizes longitudinal screening, wearable telemetry, and adherence into a structured SOAP clinical note."""
+        # TC-AI-005: Enforce clinical access check independently of LLM intent
+        allowed_roles = [UserRole.CLINICIAN, UserRole.PUBLIC_HEALTH_ADMIN, UserRole.SYSTEM_ADMIN]
+        if actor.role not in allowed_roles:
+            agent_telemetry.log_tool_call(
+                tool_name="summarize_for_clinician",
+                citizen_id=citizen_id,
+                actor_id=actor.sub,
+                actor_role=actor.role.value if hasattr(actor.role, "value") else str(actor.role),
+                arguments={"citizen_id": citizen_id},
+                status="UNAUTHORIZED",
+                details=f"Actor with role '{actor.role}' lacks clinical access required for 'summarize_for_clinician'.",
+            )
+            raise PermissionError(
+                f"Unauthorized tool execution (TC-AI-005): Actor with role '{actor.role}' lacks clinical access for 'summarize_for_clinician'."
+            )
+
         profile = get_patient_profile(citizen_id=citizen_id, actor=actor)
         vitals = get_latest_vitals(citizen_id=citizen_id, actor=actor)
         labs = get_recent_labs(citizen_id=citizen_id, actor=actor)
@@ -612,7 +831,7 @@ class SevaHealthPreventionAgent:
         citizen_name = profile.get("name", "Unknown Patient")
         age = profile.get("age", "Unknown")
 
-        # Subjective
+        # Subjective (with untrusted text defanging for TC-AI-004)
         med_names = [f"{m.get('drug_name')} {m.get('dosage')}" for m in meds]
         adh_pct = care_plan.get("adherence_percentage", 0.0)
         subjective = (
@@ -621,6 +840,17 @@ class SevaHealthPreventionAgent:
             f"Reported active medications: {', '.join(med_names) if med_names else 'None reported'}. "
             f"Wearable activity level indicates {wearables.get('activity_level', 'MODERATE')} physical engagement."
         )
+
+        encounters = store.get_encounters(citizen_id)
+        if encounters:
+            recent_notes = []
+            for enc in encounters[:3]:
+                raw_txt = getattr(enc, "soap_assessment", "") or getattr(enc, "reason_for_visit", "") or getattr(enc, "reason", "")
+                if raw_txt:
+                    defanged = ClinicalSafetyEngine.defang_untrusted_text(str(raw_txt))
+                    recent_notes.append(defanged)
+            if recent_notes:
+                subjective += f" Prior notes on file: {'; '.join(recent_notes)}."
 
         # Objective
         vitals_str = ", ".join([f"{k.upper()}: {v['value']} {v['unit']}" for k, v in vitals.items()])

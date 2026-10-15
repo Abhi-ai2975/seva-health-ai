@@ -195,6 +195,7 @@ def test_explainable_summary_generation(ensure_test_citizen):
             "diet_quality": "High refined carbs / sweets / fried foods",
             "sleep_hours": 5.0,
             "smoking": "CURRENT_SMOKER",
+            "alcohol": "NONE",
             "stress_level": 8.0,
             "family_history": ["DIABETES_BOTH_PARENTS"],
         },

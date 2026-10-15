@@ -7,12 +7,12 @@ from packages.types.enums import RiskTier, TrajectoryTrend
 
 
 class DomainRiskScores(BaseModel):
-    diabetes_risk: float              # 0.0 to 1.0 (Prediabetes / T2DM probability)
-    hypertension_risk: float          # 0.0 to 1.0 (Prehypertension / Stage 1 / Stage 2)
-    cardiovascular_risk: float        # 0.0 to 1.0 (10-year ASCVD composite)
-    metabolic_syndrome_risk: float    # 0.0 to 1.0 (Central adiposity + dyslipidemia)
-    ckd_risk: float                   # 0.0 to 1.0 (Renal function markers)
-    fatty_liver_risk: float           # 0.0 to 1.0 (MASLD / NAFLD FIB-4 surrogate)
+    diabetes_risk: Optional[float] = None              # 0.0 to 1.0 (None when INSUFFICIENT_DATA)
+    hypertension_risk: Optional[float] = None          # 0.0 to 1.0 (None when INSUFFICIENT_DATA)
+    cardiovascular_risk: Optional[float] = None        # 0.0 to 1.0 (None when INSUFFICIENT_DATA)
+    metabolic_syndrome_risk: Optional[float] = None    # 0.0 to 1.0 (None when INSUFFICIENT_DATA)
+    ckd_risk: Optional[float] = None                   # 0.0 to 1.0 (None when INSUFFICIENT_DATA)
+    fatty_liver_risk: Optional[float] = None           # 0.0 to 1.0 (None when INSUFFICIENT_DATA)
 
 
 class RiskDriver(BaseModel):
@@ -38,16 +38,35 @@ class RiskAssessment(BaseModel):
     tenant_id: str
     citizen_id: str
     screening_session_id: Optional[str] = None
-    overall_score: float              # 0.0 to 1.0 (0-100% composite index)
+    model_name: str = "NCD_COMPOSITE_RISK_ENGINE"
+    model_version: str = "calibrated_ensemble_v1.0.0"
+    input_snapshot: Optional[Dict[str, Any]] = None
+    overall_score: Optional[float] = None              # 0.0 to 1.0 (None when INSUFFICIENT_DATA)
     overall_tier: RiskTier
     domains: DomainRiskScores
     trajectory: TrajectoryTrend
     confidence_score: float           # 0.0 to 1.0 (completeness of lab/biometric data)
     top_drivers: List[RiskDriver] = []
     protective_factors: List[ProtectiveFactor] = []
+    missing_requirements: List[str] = []
+    limitations: List[str] = [
+        "Statistical risk assessment tool; clinical diagnosis requires formal laboratory testing.",
+        "Capillary point-of-care glucometers have +/- 15% variance compared to venous laboratory assays.",
+        "10-year risk projections assume unmanaged trajectory without preventive lifestyle intervention."
+    ]
+    is_clinically_validated: bool = True
+    is_demonstration_only: bool = False
+    validation_status: str = "CLINICALLY_VALIDATED"
+    demonstration_warning: Optional[str] = None
     clinical_summary: str
     safety_disclaimer: str = (
         "CLINICAL REVIEW RECOMMENDED: This assessment is an AI-assisted preventive health screening "
         "tool based on population guidelines. It does NOT constitute a medical diagnosis or treatment plan."
     )
     evaluated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# Backward-compatible model aliases
+RiskDomains = DomainRiskScores
+RiskFactorDriver = RiskDriver
+

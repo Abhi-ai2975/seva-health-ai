@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>SevaHealth AI - Health Worker Field Terminal</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
     :root {
@@ -55,6 +57,20 @@
       flex-direction: column;
       overflow: hidden;
       position: relative;
+    }
+
+    @media (max-width: 500px) {
+      body {
+        padding: 0 !important;
+        background: #ffffff !important;
+      }
+      .mobile-frame {
+        max-width: 100% !important;
+        height: 100vh !important;
+        max-height: 100vh !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+      }
     }
 
     /* Top Status Bar */
@@ -341,8 +357,8 @@
       <p id="headerSubtitle">ASHA / ANM Field Terminal • SevaHealth</p>
     </div>
     <div id="workerProfilePill" style="font-size: 12px; font-weight: 600; text-align: right; display: none;">
-      <div>Sunita Devi</div>
-      <div style="font-size: 10px; opacity: 0.8;">Ward 12</div>
+      <div id="workerProfileName">ASHA Health Worker</div>
+      <div id="workerProfileWard" style="font-size: 10px; opacity: 0.8;">Assigned Jurisdiction</div>
     </div>
   </div>
 
@@ -390,10 +406,7 @@
       </div>
 
       <div style="display: flex; gap: 10px;">
-        <button class="btn btn-secondary" onclick="simulateFailedSync()">
-          <i class="fa-solid fa-bug"></i> Test Retry
-        </button>
-        <button class="btn btn-primary" onclick="syncOutboxBatch()">
+        <button class="btn btn-primary" style="width: 100%;" onclick="syncOutboxBatch()">
           <i class="fa-solid fa-rotate"></i> Sync All Now
         </button>
       </div>
@@ -409,12 +422,12 @@
     token: null,
     worker: {
       id: "worker-user-01",
-      name: "Sunita Devi (ASHA)",
-      assigned_jurisdiction: "Ward 12",
+      name: "ASHA Health Worker",
+      assigned_jurisdiction: "Assigned Jurisdiction",
       role: "HEALTH_WORKER"
     },
     program: "prog-karnataka-ncd-01",
-    community: "Ward 12",
+    community: "Assigned Jurisdiction",
     citizen: {
       id: "cit-draft-" + Date.now().toString(36),
       abha_id: "91-4829-1029-4820",
@@ -424,7 +437,7 @@
       age: 48,
       gender: "MALE",
       phone: "9845123456",
-      village_or_ward: "Ward 12"
+      village_or_ward: "Assigned Jurisdiction"
     },
     consent: {
       granted: true,
@@ -488,9 +501,41 @@
     }
   };
 
+  function syncWorkerProfileUI() {
+    const pill = document.getElementById('workerProfilePill');
+    const nameEl = document.getElementById('workerProfileName');
+    const wardEl = document.getElementById('workerProfileWard');
+    const activeName = state.worker.name || (state.token ? "ASHA Health Worker" : "");
+    const activeWard = state.worker.assigned_jurisdiction || state.community || "Field Ward";
+    if (nameEl && activeName) nameEl.textContent = activeName;
+    if (wardEl && activeWard) wardEl.textContent = activeWard;
+    if (pill) {
+      pill.style.display = (state.step > 1 && activeName) ? "block" : "none";
+    }
+  }
+
+  function initWorkerSession() {
+    try {
+      const saved = localStorage.getItem('seva_current_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        if (u.name) state.worker.name = u.name;
+        if (u.user_id) state.worker.id = u.user_id;
+        if (u.assigned_jurisdiction) {
+          state.worker.assigned_jurisdiction = u.assigned_jurisdiction;
+          state.community = u.assigned_jurisdiction;
+          state.citizen.village_or_ward = u.assigned_jurisdiction;
+        }
+        if (u.token) state.token = u.token;
+      }
+    } catch(e) {}
+    syncWorkerProfileUI();
+  }
+
   // Initialize
   window.addEventListener('DOMContentLoaded', () => {
     loadLocalOutbox();
+    initWorkerSession();
     renderStep();
   });
 
@@ -530,10 +575,11 @@
     }
   }
 
-  function nextStep() {
+  async function nextStep() {
     if (state.step === 1) {
-      // Step 1: Login
-      state.step = 2;
+      // Step 1: Real Auth Verification
+      const success = await handleLoginStep();
+      if (!success) return;
     } else if (state.step === 2) {
       // Step 2: Program
       state.step = 3;
@@ -600,6 +646,8 @@
           </div>
 
           <div class="card">
+            <div id="loginErrorMessage" style="display: none; background: #fee2e2; border: 1px solid #f87171; color: #991b1b; padding: 10px; border-radius: 8px; font-size: 12px; margin-bottom: 12px; font-weight: 600;"></div>
+            <div id="loginSecurityNotice" style="display: none; background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; padding: 10px; border-radius: 8px; font-size: 11px; margin-bottom: 12px;"></div>
             <div class="form-group">
               <label class="form-label">Health Worker Email</label>
               <input id="loginEmail" class="form-input" value="worker@sevahealth.ai">
@@ -609,7 +657,7 @@
               <input id="loginPassword" type="password" class="form-input" value="password123">
             </div>
             <button class="btn btn-emerald" style="width: 100%; margin-top: 8px;" onclick="quickLogin()">
-              <i class="fa-solid fa-bolt"></i> 1-Tap Field Login (Sunita Devi)
+              <i class="fa-solid fa-bolt"></i> 1-Tap Quick Field Login
             </button>
           </div>
 
@@ -623,7 +671,9 @@
       case 2:
         title.textContent = "2. Select Program / Community";
         btnNext.innerHTML = "Continue <i class='fa-solid fa-arrow-right'></i>";
-        document.getElementById('workerProfilePill').style.display = "block";
+        syncWorkerProfileUI();
+        const activeWard = state.worker.assigned_jurisdiction || state.community || "Assigned Jurisdiction";
+        const activeWorkerName = state.worker.name || "ASHA Health Worker";
         c.innerHTML = `
           <div class="card">
             <div class="card-title">
@@ -647,15 +697,15 @@
             </div>
             <div class="form-group">
               <label class="form-label">Assigned Ward / Village</label>
-              <select id="communitySelect" class="form-select" onchange="state.community = this.value">
-                <option value="Ward 12" selected>Ward 12 (Kuvempunagar West, Mysuru)</option>
+              <select id="communitySelect" class="form-select" onchange="state.community = this.value; state.citizen.village_or_ward = this.value; syncWorkerProfileUI();">
+                <option value="${activeWard}" selected>${activeWard} (${state.worker.assigned_jurisdiction ? 'Assigned Jurisdiction' : 'Kuvempunagar West, Mysuru'})</option>
                 <option value="Ward 14">Ward 14 (Chamundipuram)</option>
                 <option value="Nanjangud Rural">Nanjangud Rural Primary Sub-centre</option>
                 <option value="Bannur Grama">Bannur Grama Panchayat</option>
               </select>
             </div>
             <p style="font-size: 11px; color: var(--gray-600); margin-top: 6px;">
-              <i class="fa-solid fa-circle-info"></i> Health Worker Sunita Devi has authorized jurisdiction in Ward 12.
+              <i class="fa-solid fa-circle-info"></i> Health Worker <strong>${activeWorkerName}</strong> has authorized jurisdiction in <strong>${activeWard}</strong>.
             </p>
           </div>
         `;
@@ -713,6 +763,7 @@
       case 4:
         title.textContent = "4. Obtain Citizen Consent";
         btnNext.innerHTML = "Confirm Consent <i class='fa-solid fa-arrow-right'></i>";
+        const granteeName = state.worker.name || "Assigned ASHA Worker";
         c.innerHTML = `
           <div class="card" style="border-left: 4px solid var(--emerald);">
             <div class="card-title">
@@ -724,7 +775,7 @@
             </p>
             <div style="background: #f8fafc; padding: 10px; border-radius: 8px; font-size: 11px; margin-bottom: 12px;">
               <div><strong>Purpose:</strong> Primary Care Delivery & NCD Screening</div>
-              <div><strong>Grantee:</strong> Sunita Devi (ASHA Worker) & Assigned PHC MO</div>
+              <div><strong>Grantee:</strong> <strong>${granteeName}</strong> & Assigned PHC MO</div>
               <div><strong>Validity:</strong> 365 Days (Revocable at any time)</div>
             </div>
             <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
@@ -1021,7 +1072,7 @@
             </div>
             <div class="privacy-tag">
               <i class="fa-solid fa-bell" style="color: var(--amber);"></i>
-              Automated SMS reminder will be dispatched to Ramesh Patel 24h prior.
+              Automated SMS reminder will be dispatched to ${state.citizen.first_name} ${state.citizen.last_name} 24h prior.
             </div>
           </div>
         `;
@@ -1211,9 +1262,93 @@
     alert("Simulated conflict resolution: Server timestamp matched with client field merge.");
   }
 
-  function quickLogin() {
-    state.step = 2;
-    renderStep();
+  async function handleLoginStep() {
+    const emailInput = document.getElementById('loginEmail');
+    const passInput = document.getElementById('loginPassword');
+    if (!emailInput || !passInput) return false;
+
+    const email = emailInput.value.trim();
+    const password = passInput.value;
+    const errBox = document.getElementById('loginErrorMessage');
+    const secBox = document.getElementById('loginSecurityNotice');
+
+    if (errBox) errBox.style.display = "none";
+    if (secBox) secBox.style.display = "none";
+
+    try {
+      const resp = await fetch("/api/v1/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
+
+      if (!resp.ok) {
+        state.failedLoginAttempts = (state.failedLoginAttempts || 0) + 1;
+        const data = await resp.json().catch(() => ({}));
+        if (errBox) {
+          errBox.textContent = data.detail || "Incorrect email or password. Please verify your credentials.";
+          errBox.style.display = "block";
+        }
+        if (secBox && state.failedLoginAttempts >= 3) {
+          secBox.innerHTML = "<i class='fa-solid fa-triangle-exclamation'></i> <strong>Security Alert:</strong> Multiple failed authentication attempts logged in monitoring registry.";
+          secBox.style.display = "block";
+        }
+        return false;
+      }
+
+      const tokenData = await resp.json();
+      state.token = tokenData.access_token;
+      state.failedLoginAttempts = 0;
+
+      // Extract dynamic health worker identity from API response
+      if (tokenData.name) {
+        state.worker.name = tokenData.name;
+      }
+      if (tokenData.user_id) {
+        state.worker.id = tokenData.user_id;
+      }
+      if (tokenData.assigned_jurisdiction) {
+        state.worker.assigned_jurisdiction = tokenData.assigned_jurisdiction;
+        state.community = tokenData.assigned_jurisdiction;
+        state.citizen.village_or_ward = tokenData.assigned_jurisdiction;
+      }
+      if (tokenData.role) {
+        state.worker.role = tokenData.role;
+      }
+
+      // Persist session to localStorage
+      try {
+        localStorage.setItem('seva_current_user', JSON.stringify({
+          token: tokenData.access_token,
+          email: email,
+          name: tokenData.name,
+          role: tokenData.role,
+          user_id: tokenData.user_id,
+          tenant_id: tokenData.tenant_id,
+          assigned_jurisdiction: tokenData.assigned_jurisdiction
+        }));
+        localStorage.setItem('seva_access_token', tokenData.access_token);
+      } catch(e) {}
+
+      syncWorkerProfileUI();
+      state.step = 2;
+      renderStep();
+      return true;
+    } catch (err) {
+      if (errBox) {
+        errBox.textContent = "Unable to connect to authentication gateway. Please check network.";
+        errBox.style.display = "block";
+      }
+      return false;
+    }
+  }
+
+  async function quickLogin() {
+    const emailInput = document.getElementById('loginEmail');
+    const passInput = document.getElementById('loginPassword');
+    if (emailInput) emailInput.value = 'worker@sevahealth.ai';
+    if (passInput) passInput.value = 'password123';
+    await handleLoginStep();
   }
 </script>
 </body>
