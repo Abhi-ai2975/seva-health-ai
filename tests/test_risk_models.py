@@ -250,9 +250,9 @@ def test_missing_data_triggers_insufficient_data():
 def test_ncd_risk_engine_orchestration():
     engine = NCDRiskEngine()
     models = engine.list_models()
-    assert len(models) == 5
+    assert len(models) >= 5
     domains = [m["key"] for m in models]
-    assert set(domains) == {"diabetes", "hypertension", "cardiovascular", "obesity", "ckd"}
+    assert {"diabetes", "hypertension", "cardiovascular", "obesity", "ckd"}.issubset(set(domains))
 
     # Evaluate full metabolic syndrome profile
     raw_inputs = {

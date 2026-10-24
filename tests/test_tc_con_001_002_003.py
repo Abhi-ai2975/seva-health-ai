@@ -458,10 +458,11 @@ class TestTC_CON_003_ConsentPurposeMismatch:
     def test_tc_con_003_data_scope_mismatch_denied(self, auth_tokens):
         """Verifies that attempting to access data outside granted granular scope is denied."""
         citizen_id = f"citizen-scope-test-{uuid.uuid4().hex[:8]}"
-        make_synthetic_citizen(citizen_id, user_id="synth-user-01")
+        user_id = f"synth-user-{uuid.uuid4().hex[:8]}"
+        make_synthetic_citizen(citizen_id, user_id=user_id)
 
         citizen_token = create_access_token(
-            subject="synth-user-01",
+            subject=user_id,
             tenant_id="mysuru_district_health",
             role=UserRole.CITIZEN,
         )

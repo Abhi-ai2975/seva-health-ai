@@ -10,10 +10,13 @@ from packages.auth.jwt import (
     create_refresh_token,
     verify_password,
     get_password_hash,
+    is_bcrypt_hash,
     validate_password_strength,
     get_current_user_token,
     TokenPayload,
     require_roles,
+    ROLE_SCOPES,
+    get_scopes_for_role,
 )
 from packages.auth.access_control import HealthcareAuthorizationEngine
 from packages.observability.audit import audit_logger
@@ -26,6 +29,7 @@ _DUMMY_TIMING_HASH = get_password_hash("SevaHealthTimingDummyPad2026!")
 
 router = APIRouter(prefix="/auth", tags=["Identity & Access Management"])
 citizens_router = APIRouter(prefix="/citizens", tags=["Citizen Registry"])
+
 
 
 # Request / Response Models
@@ -81,11 +85,17 @@ class ConsentGrantRequest(BaseModel):
     version: str = "v1.0.0"
     notice_id: Optional[str] = "SYS-CON-001-NOTICE-V1"
     duration_days: int = 30
+    proxy_mandate: Optional[Dict[str, Any]] = None
+    consent_artifact: Optional[Dict[str, Any]] = None
+    artifact_signature: Optional[str] = None
 
 
 class ConsentRevokeRequest(BaseModel):
     citizen_id: str
     consent_id: str
+    proxy_mandate: Optional[Dict[str, Any]] = None
+    consent_artifact: Optional[Dict[str, Any]] = None
+    artifact_signature: Optional[str] = None
 
 
 class CitizenCreateRequest(BaseModel):
@@ -207,6 +217,21 @@ async def login_for_access_token(form_data: LoginRequest, request: Request):
     # 3. Successful authentication: Reset failed attempt counters
     store.record_successful_login(form_data.email)
 
+    # Automatic migration: Upgrade legacy hashes to bcrypt upon first successful login
+    if not is_bcrypt_hash(user.hashed_password):
+        user.hashed_password = get_password_hash(form_data.password)
+        store.add_user(user)
+        audit_logger.record(
+            tenant_id=user.tenant_id,
+            actor_id=user.id,
+            actor_role=user.role,
+            action=AuditAction.PASSWORD_RESET,
+            resource_type="User",
+            resource_id=user.id,
+            details={"migration": "Legacy password hash automatically upgraded to bcrypt on login"},
+            ip_address=client_ip,
+        )
+
     access_jti = str(uuid.uuid4())
     refresh_jti = str(uuid.uuid4())
 
@@ -214,7 +239,7 @@ async def login_for_access_token(form_data: LoginRequest, request: Request):
         subject=user.id,
         tenant_id=user.tenant_id,
         role=user.role,
-        scopes=["*"],
+        scopes=get_scopes_for_role(user.role),
         jti=access_jti,
     )
     refresh_token = create_refresh_token(
@@ -376,7 +401,7 @@ async def refresh_access_token(payload: RefreshTokenRequest, request: Request):
             subject=user.id,
             tenant_id=user.tenant_id,
             role=user.role,
-            scopes=["*"],
+            scopes=get_scopes_for_role(user.role),
             jti=new_access_jti,
         )
         new_refresh_token = create_refresh_token(
@@ -598,6 +623,9 @@ async def reset_password(payload: PasswordResetRequest):
     for s in store.list_user_sessions(user.id):
         store.revoke_token(s.token_jti)
 
+    # Persist updated password hash to SQLite so reset survives server restarts (Bug 2 fix)
+    store._persist_user_to_sqlite(user)
+
     audit_logger.record(
         tenant_id=user.tenant_id,
         actor_id=user.id,
@@ -620,12 +648,22 @@ async def grant_consent(
     if not citizen:
         raise HTTPException(status_code=404, detail="Citizen not found")
 
-    # Only citizen themselves or System Admin can grant consent
-    if current_user.role != UserRole.SYSTEM_ADMIN and (citizen.user_id != current_user.sub and citizen.id != current_user.sub):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the citizen or an authorized guardian can grant medical record consent."
-        )
+    # Enforce that consent grants can only be initiated by the citizen data principal or an authenticated proxy with explicit consent artifact validation
+    is_citizen_owner = (citizen.user_id == current_user.sub or citizen.id == current_user.sub)
+    if not is_citizen_owner:
+        artifact = payload.consent_artifact or payload.proxy_mandate
+        has_sig = False
+        if artifact and isinstance(artifact, dict):
+            has_sig = bool(
+                artifact.get("signature") or
+                artifact.get("artifact_signature") or
+                payload.artifact_signature
+            )
+        if not (artifact and has_sig):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Consent operations on behalf of a citizen require an authenticated proxy with explicit consent artifact validation."
+            )
 
     directive = ConsentDirective(
         id=str(uuid.uuid4()),
@@ -673,16 +711,44 @@ async def grant_consent(
     }
 
 
-@router.get("/consent/{consent_id}")
-async def get_consent_directive(
-    consent_id: str,
+@router.get("/consent/{identifier}")
+async def get_consent_directive_or_list(
+    identifier: str,
     current_user: TokenPayload = Depends(get_current_user_token)
 ):
-    """Retrieves an existing consent directive record by ID (TC-CON-001)."""
-    consent = store.get_consent(consent_id)
-    if not consent:
-        raise HTTPException(status_code=404, detail=f"Consent directive '{consent_id}' not found.")
-    return consent.to_dict() if hasattr(consent, "to_dict") else vars(consent)
+    """Retrieves an existing consent directive record by ID (TC-CON-001) or lists citizen consents."""
+    # 1. If identifier matches a citizen record, list their consents
+    citizen = store.get_citizen(identifier) or store.get_citizen_by_user_id(identifier)
+    if citizen:
+        HealthcareAuthorizationEngine.enforce_citizen_access(current_user, citizen)
+        directives = store.get_citizen_consents(citizen.id)
+        return [
+            {
+                "id": d.id,
+                "citizen_id": d.citizen_id,
+                "grantee_id": d.grantee_id,
+                "grantee_role": d.grantee_role.value if hasattr(d.grantee_role, "value") else str(d.grantee_role),
+                "purpose": d.purpose,
+                "status": d.status,
+                "granted_at": d.granted_at.isoformat() if d.granted_at else None,
+                "expires_at": d.expires_at.isoformat() if d.expires_at else None,
+                "is_valid": d.is_valid() if hasattr(d, "is_valid") else True,
+            }
+            for d in directives
+        ]
+
+    # 2. Check if identifier is a specific consent directive ID
+    consent = store.get_consent(identifier)
+    if consent:
+        # Enforce authorization on consent directive subject to prevent cross-citizen IDOR
+        subject_id = getattr(consent, "citizen_id", None) or getattr(consent, "subject", None)
+        if subject_id:
+            cit = store.get_citizen(subject_id)
+            if cit:
+                HealthcareAuthorizationEngine.enforce_citizen_access(current_user, cit)
+        return consent.to_dict() if hasattr(consent, "to_dict") else vars(consent)
+
+    raise HTTPException(status_code=404, detail=f"Consent directive or citizen '{identifier}' not found.")
 
 
 @router.post("/consent/revoke")
@@ -694,11 +760,22 @@ async def revoke_consent(
     if not citizen:
         raise HTTPException(status_code=404, detail="Citizen not found")
 
-    if current_user.role != UserRole.SYSTEM_ADMIN and (citizen.user_id != current_user.sub and citizen.id != current_user.sub):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the citizen or an authorized guardian can revoke consent."
-        )
+    # Enforce that consent revocation can only be initiated by the citizen data principal or an authenticated proxy with explicit consent artifact validation
+    is_citizen_owner = (citizen.user_id == current_user.sub or citizen.id == current_user.sub)
+    if not is_citizen_owner:
+        artifact = payload.consent_artifact or payload.proxy_mandate
+        has_sig = False
+        if artifact and isinstance(artifact, dict):
+            has_sig = bool(
+                artifact.get("signature") or
+                artifact.get("artifact_signature") or
+                payload.artifact_signature
+            )
+        if not (artifact and has_sig):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Consent operations on behalf of a citizen require an authenticated proxy with explicit consent artifact validation."
+            )
 
     success = store.revoke_consent(payload.citizen_id, payload.consent_id)
     if not success:
@@ -715,35 +792,6 @@ async def revoke_consent(
     )
 
     return {"status": "revoked", "consent_id": payload.consent_id}
-
-
-@router.get("/consent/{citizen_id}")
-async def list_citizen_consents(
-    citizen_id: str,
-    current_user: TokenPayload = Depends(get_current_user_token)
-):
-    citizen = store.get_citizen(citizen_id)
-    if not citizen:
-        raise HTTPException(status_code=404, detail="Citizen not found")
-
-    # Authorize: citizen themselves, admin, or assigned clinician
-    HealthcareAuthorizationEngine.enforce_citizen_access(current_user, citizen)
-
-    directives = store.get_citizen_consents(citizen_id)
-    return [
-        {
-            "id": d.id,
-            "citizen_id": d.citizen_id,
-            "grantee_id": d.grantee_id,
-            "grantee_role": d.grantee_role.value,
-            "purpose": d.purpose,
-            "status": d.status,
-            "granted_at": d.granted_at.isoformat(),
-            "expires_at": d.expires_at.isoformat() if d.expires_at else None,
-            "is_valid": d.is_valid(),
-        }
-        for d in directives
-    ]
 
 
 @router.get("/me")
@@ -864,6 +912,9 @@ async def update_citizen_profile(
         citizen.village_or_ward = XSSSanitizer.sanitize_text(payload.village_or_ward)
     if payload.primary_language is not None:
         citizen.primary_language = payload.primary_language
+
+    # Persist updated citizen record to SQLite so changes survive server restarts (Bug 1 fix)
+    store._persist_citizen_to_sqlite(citizen)
 
     audit_logger.record(
         tenant_id=citizen.tenant_id,

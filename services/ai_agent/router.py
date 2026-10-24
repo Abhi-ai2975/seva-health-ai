@@ -1,8 +1,10 @@
+from datetime import datetime
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
 from packages.auth.jwt import get_current_user_token, TokenPayload
+from packages.auth.access_control import HealthcareAuthorizationEngine
 from packages.ai_schemas.schemas import LLMRiskExplanationOutput, LLMSOAPSummaryOutput
 from services.ai_agent.provider import get_ai_provider, AIServiceUnavailableError
 from services.ai_agent.safety import ClinicalSafetyEnforcer
@@ -35,6 +37,8 @@ async def explain_risk_with_ai(
     citizen = store.get_citizen(citizen_id)
     if not citizen:
         raise HTTPException(status_code=404, detail="Citizen not found")
+
+    HealthcareAuthorizationEngine.enforce_citizen_access(current_user, citizen)
 
     risk = store.get_latest_risk(citizen_id)
     score = risk.overall_score if risk else 0.50

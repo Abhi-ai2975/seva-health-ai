@@ -516,12 +516,18 @@ WORKFLOW_PROFILES: Dict[str, QuestionnaireWorkflowProfile] = {
 # 2. COMPUTATION & EVALUATION LOGIC
 # ==============================================================================
 
-def calculate_derived_bmi(weight_kg: Optional[float], height_val: Optional[float], decimals: int = 2) -> Optional[float]:
+def calculate_derived_bmi(
+    weight_kg: Optional[float],
+    height_val: Optional[float] = None,
+    height_cm: Optional[float] = None,
+    decimals: int = 2
+) -> Optional[float]:
     """Calculates BMI = weight in kg ÷ (height in metres)².
     Supports height in metres (e.g. 1.70) or centimetres (e.g. 170.0).
     """
-    if weight_kg and height_val and weight_kg > 0 and height_val > 0:
-        h_m = height_val if height_val <= 3.0 else (height_val / 100.0)
+    effective_height = height_val if height_val is not None else height_cm
+    if weight_kg and effective_height and weight_kg > 0 and effective_height > 0:
+        h_m = effective_height if effective_height <= 3.0 else (effective_height / 100.0)
         if h_m > 0:
             return round(weight_kg / (h_m * h_m), decimals)
     return None
@@ -666,7 +672,10 @@ class QuestionnaireEngine:
         for q in required_questions:
             val = answers.get(q.id)
             if val is None or val == "" or (isinstance(val, list) and len(val) == 0):
-                missing_fields.append(q.id)
+                if q.default_value is not None:
+                    answers[q.id] = q.default_value
+                else:
+                    missing_fields.append(q.id)
 
         if missing_fields:
             if not submission.allow_incomplete:

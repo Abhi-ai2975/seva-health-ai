@@ -49,6 +49,9 @@ def setup_seed():
     store.referrals.clear()
     store.followups.clear()
     health_worker_service._processed_idempotency.clear()
+    for cid in list(store.citizens.keys()):
+        if not cid.startswith("citizen-"):
+            store.citizens.pop(cid, None)
     seed_all_demo_data()
 
 

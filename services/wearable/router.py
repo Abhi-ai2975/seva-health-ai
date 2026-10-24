@@ -72,9 +72,28 @@ async def sync_wearable_data(
     wearable_consents = consent_manager.list_consents(subject=citizen_id, category=ConsentCategory.WEARABLE_DATA)
     conn_states = wearable_adapter.connections.get(citizen_id, {})
     is_adapter_revoked = any(c.status == "REVOKED" or c.consent_revoked_at is not None for c in conn_states.values())
-    is_consent_revoked = any(c.status == ConsentStatus.REVOKED for c in wearable_consents)
+    active_consents = [c for c in wearable_consents if c.status == ConsentStatus.ACTIVE and c.is_valid()]
+    has_active_consent = bool(active_consents)
 
-    if is_adapter_revoked or is_consent_revoked or (wearable_consents and all(not c.is_valid() for c in wearable_consents)):
+    is_revoked = False
+    if wearable_consents:
+        if not has_active_consent:
+            is_revoked = True
+        elif is_adapter_revoked:
+            latest_active = max(c.created_at for c in active_consents)
+            latest_adapter_revocation = max((c.consent_revoked_at for c in conn_states.values() if c.consent_revoked_at), default="")
+            if latest_adapter_revocation and latest_active < latest_adapter_revocation:
+                is_revoked = True
+            elif not latest_adapter_revocation and any(c.status == "REVOKED" for c in conn_states.values()):
+                # Re-activate adapter connection when active consent is present
+                for c in conn_states.values():
+                    if c.status == "REVOKED":
+                        c.status = "CONNECTED"
+                        c.consent_revoked_at = None
+    elif is_adapter_revoked:
+        is_revoked = True
+
+    if is_revoked:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Wearable access has been REVOKED by citizen. Synchronization is blocked.",

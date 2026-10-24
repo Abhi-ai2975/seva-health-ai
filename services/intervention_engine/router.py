@@ -43,7 +43,7 @@ async def list_configurable_rules(
 async def generate_comprehensive_prevention_plan(
     citizen_id: str,
     custom_input: Optional[PreventionPlanInput] = None,
-    current_user: TokenPayload = Depends(get_current_user_token_optional)
+    current_user: TokenPayload = Depends(get_current_user_token)
 ):
     """Generates a complete 30-day prevention care plan including:
     - Goals (SMART preventive targets)
@@ -157,7 +157,7 @@ async def get_comprehensive_prevention_plan(
 @router.post("/generate/{citizen_id}", response_model=CarePlan)
 async def generate_citizen_care_plan(
     citizen_id: str,
-    current_user: TokenPayload = Depends(get_current_user_token_optional)
+    current_user: TokenPayload = Depends(get_current_user_token)
 ):
     citizen = store.get_citizen(citizen_id)
     if not citizen:

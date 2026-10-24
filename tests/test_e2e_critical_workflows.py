@@ -107,7 +107,12 @@ class TestCriticalWorkflowsE2E:
             "purpose": "NCD Early Detection & Prevention Program",
             "scope": ["vitals", "labs", "lifestyle", "risk_scores", "wearables"],
             "recipient": "PRIMARY_CARE_TEAM",
-            "version": "v1.0.0"
+            "version": "v1.0.0",
+            "consent_artifact": {
+                "artifact_id": f"abdm-art-{TestCriticalWorkflowsE2E.citizen_id[:8]}",
+                "signature": "SHA256-RSA:abdm-consent-artifact-sig-valid",
+                "citizen_id": TestCriticalWorkflowsE2E.citizen_id,
+            },
         }
 
         resp = client.post("/api/v1/privacy/consents", json=consent_payload, headers=self.auth_headers)

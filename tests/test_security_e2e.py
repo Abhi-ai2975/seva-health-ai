@@ -120,32 +120,44 @@ class TestSecurityVectorsE2E:
     def test_consent_violation_blocks_data_sync(self):
         """Revoking wearable or clinical consent immediately terminates data processing."""
         hw_token = get_token_for("worker@sevahealth.ai")
-        headers = {"Authorization": f"Bearer {hw_token}"}
+        hw_headers = {"Authorization": f"Bearer {hw_token}"}
+        citizen_token = get_token_for("citizen@sevahealth.ai")
+        citizen_headers = {"Authorization": f"Bearer {citizen_token}"}
 
         citizen_id = "citizen-ramesh-patel-01"
 
-        # 1. Grant WEARABLE_DATA consent
+        # Verify unilateral override by health worker without proxy artifact is blocked (Issue D)
+        unilateral_resp = client.post("/api/v1/privacy/consents", json={
+            "subject": citizen_id,
+            "category": "wearable_data",
+            "purpose": "Continuous Cardiometabolic Telemetry",
+            "scope": ["steps", "heart_rate", "sleep"],
+            "recipient": "MONITORING_ENGINE"
+        }, headers=hw_headers)
+        assert unilateral_resp.status_code == 403
+
+        # 1. Grant WEARABLE_DATA consent by citizen data principal
         grant_resp = client.post("/api/v1/privacy/consents", json={
             "subject": citizen_id,
             "category": "wearable_data",
             "purpose": "Continuous Cardiometabolic Telemetry",
             "scope": ["steps", "heart_rate", "sleep"],
             "recipient": "MONITORING_ENGINE"
-        }, headers=headers)
+        }, headers=citizen_headers)
         assert grant_resp.status_code == 201
         consent_id = grant_resp.json()["id"]
 
-        # 2. Revoke consent immediately
+        # 2. Revoke consent immediately by citizen data principal
         revoke_resp = client.post(f"/api/v1/privacy/consents/{consent_id}/revoke", json={
             "reason": "Citizen requested immediate data collection opt-out"
-        }, headers=headers)
+        }, headers=citizen_headers)
         assert revoke_resp.status_code == 200
         assert revoke_resp.json()["status"] == "REVOKED"
 
         # 3. Attempting to sync wearable data must now be blocked with HTTP 403
         sync_resp = client.post(
             f"/api/v1/wearables/sync/{citizen_id}?provider=garmin",
-            headers=headers
+            headers=hw_headers
         )
         assert sync_resp.status_code == 403
         assert "REVOKED by citizen" in sync_resp.json()["detail"]

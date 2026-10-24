@@ -11,10 +11,14 @@ import uuid
 import copy
 import sqlite3
 import json
+import logging
+import threading
+import functools
 from pathlib import Path
 
 DB_DIR = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = DB_DIR / "sevahealth.db"
+logger = logging.getLogger("sevahealth.store")
 
 from packages.types.enums import (
     UserRole,
@@ -263,10 +267,32 @@ class ConsentDirective:
         }
 
 
+def locked(func):
+    """Reentrant thread-safety lock wrapper for store methods."""
+    if getattr(func, "_is_locked", False):
+        return func
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return func(self, *args, **kwargs)
+    wrapper._is_locked = True
+    return wrapper
+
+
+def synchronized_class(cls):
+    """Automatically wrap all non-dunder callable methods with the reentrant lock decorator."""
+    for attr_name, attr_val in list(cls.__dict__.items()):
+        if callable(attr_val) and not attr_name.startswith("__"):
+            setattr(cls, attr_name, locked(attr_val))
+    return cls
+
+
+@synchronized_class
 class SevaHealthStore:
     """Thread-safe unified repository for SevaHealth AI."""
 
     def __init__(self):
+        self._lock = threading.RLock()
         self.tenants: Dict[str, str] = {
             "karnataka_state_health": "Karnataka State Health Mission",
             "mysuru_district_health": "Mysuru District Health Office",
@@ -313,6 +339,7 @@ class SevaHealthStore:
         self._init_sqlite()
         self._load_from_sqlite()
 
+    @locked
     def _init_sqlite(self):
         try:
             DB_DIR.mkdir(parents=True, exist_ok=True)
@@ -357,9 +384,12 @@ class SevaHealthStore:
                     )
                 """)
                 conn.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to initialize SQLite store at {DB_PATH}: {e}", exc_info=True)
+            metrics.record_error("SQLITE_INIT_FAILURE", "STORE", str(e))
+            metrics.record_db_query("CREATE_TABLE", "sqlite_init", 0.0, success=False)
 
+    @locked
     def _load_from_sqlite(self):
         try:
             if not DB_PATH.exists():
@@ -451,10 +481,13 @@ class SevaHealthStore:
                         except Exception:
                             c.stored_at = c.created_at
                     self.citizens[c.id] = c
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to load records from SQLite store at {DB_PATH}: {e}", exc_info=True)
+            metrics.record_error("SQLITE_LOAD_FAILURE", "STORE", str(e))
+            metrics.record_db_query("SELECT", "sqlite_load", 0.0, success=False)
 
-    def _persist_user_to_sqlite(self, user: UserRecord):
+    @locked
+    def _persist_user_to_sqlite(self, user: UserRecord) -> bool:
         try:
             DB_DIR.mkdir(parents=True, exist_ok=True)
             with sqlite3.connect(DB_PATH) as conn:
@@ -497,10 +530,15 @@ class SevaHealthStore:
                     stored_str,
                 ))
                 conn.commit()
-        except Exception:
-            pass
+            return True
+        except Exception as e:
+            logger.error(f"Failed to persist user '{user.id}' to SQLite at {DB_PATH}: {e}", exc_info=True)
+            metrics.record_error("SQLITE_PERSIST_USER_FAILURE", "STORE", str(e))
+            metrics.record_db_query("INSERT", "users", 0.0, success=False)
+            return False
 
-    def _persist_citizen_to_sqlite(self, citizen: CitizenRecord):
+    @locked
+    def _persist_citizen_to_sqlite(self, citizen: CitizenRecord) -> bool:
         try:
             DB_DIR.mkdir(parents=True, exist_ok=True)
             with sqlite3.connect(DB_PATH) as conn:
@@ -551,8 +589,12 @@ class SevaHealthStore:
                     stored_str,
                 ))
                 conn.commit()
-        except Exception:
-            pass
+            return True
+        except Exception as e:
+            logger.error(f"Failed to persist citizen '{citizen.id}' to SQLite at {DB_PATH}: {e}", exc_info=True)
+            metrics.record_error("SQLITE_PERSIST_CITIZEN_FAILURE", "STORE", str(e))
+            metrics.record_db_query("INSERT", "citizens", 0.0, success=False)
+            return False
 
     def list_users(self) -> List[UserRecord]:
         seen = set()
@@ -836,18 +878,6 @@ class SevaHealthStore:
             return [c for c in cases if c.status == status]
         return sorted(cases, key=lambda c: c.created_at, reverse=True)
 
-    # Trajectory Snapshot Management
-    def add_trajectory_snapshot(self, citizen_id: str, snapshot: Any):
-        if citizen_id not in self.trajectory_snapshots:
-            self.trajectory_snapshots[citizen_id] = []
-        self.trajectory_snapshots[citizen_id].append(snapshot)
-
-    def get_trajectory_snapshots(self, citizen_id: str) -> List[Any]:
-        return self.trajectory_snapshots.get(citizen_id, [])
-
-    def clear_trajectory_snapshots(self, citizen_id: str):
-        self.trajectory_snapshots[citizen_id] = []
-
     # Session & Token Management
     def record_session(self, session: SessionRecord):
         self.sessions[session.id] = session
@@ -890,6 +920,8 @@ class SevaHealthStore:
             if user.failed_login_attempts >= 5:
                 user.is_locked = True
                 user.locked_until = now + timedelta(minutes=15)
+            # Persist account lock state to SQLite so brute-force protection survives restarts (Bug 3 fix)
+            self._persist_user_to_sqlite(user)
 
         # Repeated failures threshold: 3 or more attempts
         alert_triggered = failure_count >= 3
@@ -922,6 +954,8 @@ class SevaHealthStore:
             user.failed_login_attempts = 0
             user.is_locked = False
             user.locked_until = None
+            # Persist cleared lock state to SQLite so unlock survives restarts (Bug 3 fix)
+            self._persist_user_to_sqlite(user)
         self.failed_login_tracker.pop(identifier, None)
 
     def is_account_locked(self, identifier: str) -> Tuple[bool, Optional[str]]:
@@ -1449,5 +1483,6 @@ class SevaHealthStore:
         }
 
 
-# Singleton store instance
+# Aliases and singleton store instance
+InMemoryHealthcareStore = SevaHealthStore
 store = SevaHealthStore()

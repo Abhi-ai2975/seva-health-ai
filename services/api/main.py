@@ -57,10 +57,10 @@ app = FastAPI(
 app.add_middleware(RateLimiterMiddleware)
 app.add_middleware(SecureHeadersMiddleware)
 
-# Cross-Origin Resource Sharing (CORS)
+# Cross-Origin Resource Sharing (CORS) - Explicitly configured authorized origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -282,6 +282,7 @@ app.include_router(deployment_router, prefix="/api/v1")
 
 @app.on_event("startup")
 async def on_app_startup():
+    settings.validate_production_security()
     from scripts.seed_data import seed_all_demo_data
     seed_all_demo_data()
     await job_queue_manager.start_workers(concurrency_per_queue=2)

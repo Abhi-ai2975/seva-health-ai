@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, R
 from pydantic import BaseModel
 
 from packages.auth.jwt import get_current_user_token, TokenPayload, require_roles
+from packages.auth.access_control import HealthcareAuthorizationEngine
 from packages.types.enums import UserRole
 from services.store import store
 from services.documents.models import (
@@ -241,6 +242,14 @@ async def download_original_document(
     if not file_record:
         raise HTTPException(status_code=404, detail="Document file not found in storage.")
 
+    # Enforce healthcare authorization on citizen record
+    citizen_id = file_record.get("citizen_id")
+    if citizen_id:
+        citizen = store.get_citizen(citizen_id)
+        if not citizen:
+            raise HTTPException(status_code=404, detail=f"Citizen '{citizen_id}' not found.")
+        HealthcareAuthorizationEngine.enforce_citizen_access(current_user, citizen)
+
     # 2. Confinement verification on stored path
     try:
         _ = StorageVaultManager.resolve_and_confine(
@@ -295,8 +304,11 @@ async def retrieve_document_by_path(
 
     # 2. Confinement check
     effective_citizen = citizen_id
-    if current_user.role == UserRole.CITIZEN and not effective_citizen:
-        effective_citizen = current_user.sub
+    if current_user.role == UserRole.CITIZEN:
+        cit_record = store.get_citizen_by_user_id(current_user.sub)
+        resolved_cit_id = cit_record.id if cit_record else current_user.sub
+        if not effective_citizen:
+            effective_citizen = resolved_cit_id
 
     try:
         confined_path = StorageVaultManager.resolve_and_confine(
@@ -318,20 +330,38 @@ async def retrieve_document_by_path(
         )
 
     # 3. Retrieve from store by matching storage_path
-    normalized_path = path.replace("\\", "/")
+    normalized_path = path.replace("\\", "/").rstrip("/")
+    from pathlib import Path as FilePath
+    path_filename = FilePath(normalized_path).name
     matched_record = None
+
+    # First attempt exact storage_path match
     for rec in store.document_files.values():
-        rec_path = rec.get("storage_path", "").replace("\\", "/")
-        if rec_path == normalized_path or str(confined_path).endswith(rec.get("filename", "~~~")):
+        rec_path = rec.get("storage_path", "").replace("\\", "/").rstrip("/")
+        if rec_path == normalized_path:
             matched_record = rec
             break
+
+    # Secondary match: exact filename matching citizen_id or document_id
+    if not matched_record:
+        for rec in store.document_files.values():
+            rec_filename = rec.get("filename")
+            rec_cit = rec.get("citizen_id")
+            if rec_filename == path_filename:
+                if not citizen_id or rec_cit == citizen_id or rec_cit in normalized_path:
+                    matched_record = rec
+                    break
 
     if not matched_record:
         raise HTTPException(status_code=404, detail="Authorized document not found in storage vault.")
 
     # Check citizen authorization (cross-citizen IDOR defense)
-    if current_user.role == UserRole.CITIZEN and matched_record.get("citizen_id") != current_user.sub:
-        raise HTTPException(status_code=403, detail="Unauthorized access to cross-citizen document.")
+    if current_user.role == UserRole.CITIZEN:
+        cit_record = store.get_citizen_by_user_id(current_user.sub)
+        resolved_cit_id = cit_record.id if cit_record else current_user.sub
+        allowed_ids = {resolved_cit_id, current_user.sub}
+        if matched_record.get("citizen_id") not in allowed_ids:
+            raise HTTPException(status_code=403, detail="Unauthorized access to cross-citizen document.")
 
     return Response(
         content=matched_record["raw_bytes"],
@@ -456,5 +486,9 @@ async def list_citizen_documents(
     citizen_id: str,
     current_user: TokenPayload = Depends(get_current_user_token),
 ):
+    citizen = store.get_citizen(citizen_id)
+    if not citizen:
+        raise HTTPException(status_code=404, detail=f"Citizen '{citizen_id}' not found.")
+    HealthcareAuthorizationEngine.enforce_citizen_access(current_user, citizen)
     return store.documents.get(citizen_id, [])
 

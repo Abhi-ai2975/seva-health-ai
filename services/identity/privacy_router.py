@@ -105,16 +105,25 @@ class GrantConsentRequest(BaseModel):
     expires_at: Optional[str] = Field(None, description="ISO-8601 expiration timestamp")
     version: str = Field(default="v1.0.0", description="Policy version")
     notice_id: Optional[str] = Field(default="SYS-CON-001-NOTICE-V1", description="Referenced consent notice presented")
+    proxy_mandate: Optional[Dict[str, Any]] = Field(None, description="Authenticated proxy mandate")
+    consent_artifact: Optional[Dict[str, Any]] = Field(None, description="ABDM consent artifact")
+    artifact_signature: Optional[str] = Field(None, description="Signature for proxy validation")
 
 
 class ModifyConsentRequest(BaseModel):
     new_scope: Optional[List[str]] = None
     new_expires_at: Optional[str] = None
     new_purpose: Optional[str] = None
+    proxy_mandate: Optional[Dict[str, Any]] = Field(None, description="Authenticated proxy mandate")
+    consent_artifact: Optional[Dict[str, Any]] = Field(None, description="ABDM consent artifact")
+    artifact_signature: Optional[str] = Field(None, description="Signature for proxy validation")
 
 
 class RevokeConsentRequest(BaseModel):
     reason: str = Field(default="Revoked by citizen request", description="Reason for consent revocation")
+    proxy_mandate: Optional[Dict[str, Any]] = Field(None, description="Authenticated proxy mandate")
+    consent_artifact: Optional[Dict[str, Any]] = Field(None, description="ABDM consent artifact")
+    artifact_signature: Optional[str] = Field(None, description="Signature for proxy validation")
 
 
 class VerifyAccessRequest(BaseModel):
@@ -151,15 +160,51 @@ async def verify_consent_access(
     }
 
 
+def _validate_proxy_mandate(
+    actor: TokenPayload,
+    target_subject: Optional[str],
+    consent_artifact: Optional[Dict[str, Any]] = None,
+    proxy_mandate: Optional[Dict[str, Any]] = None,
+    artifact_signature: Optional[str] = None,
+) -> str:
+    """Enforces that healthcare workers/non-citizens cannot unilaterally override or grant consent without validated proxy mandate / ABDM artifact."""
+    artifact = consent_artifact or proxy_mandate
+    has_sig = False
+    if artifact and isinstance(artifact, dict):
+        has_sig = bool(
+            artifact.get("signature") or
+            artifact.get("artifact_signature") or
+            artifact_signature
+        )
+    if not (artifact and has_sig):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Consent operations on behalf of a citizen require an authenticated proxy with explicit consent artifact validation.",
+        )
+    resolved = target_subject or artifact.get("citizen_id") or artifact.get("subject")
+    if not resolved:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Subject citizen ID must be specified in the consent directive or artifact.",
+        )
+    return resolved
+
+
 def _resolve_subject(token: TokenPayload, requested_subject: Optional[str] = None) -> str:
     """Resolves subject ensuring citizens can only manage their own consents."""
-    if requested_subject and token.role in [UserRole.SYSTEM_ADMIN, UserRole.CLINICIAN, UserRole.HEALTH_WORKER]:
-        return requested_subject
     if token.role == UserRole.CITIZEN:
         # Check citizen record mapping
         citizen = store.get_citizen_by_user_id(token.sub)
-        return citizen.id if citizen else token.sub
-    return requested_subject or token.sub
+        own_id = citizen.id if citizen else token.sub
+        if requested_subject and requested_subject != own_id and requested_subject != token.sub:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Citizens can only manage consent for their own health records.",
+            )
+        return own_id
+    if requested_subject:
+        return requested_subject
+    return token.sub
 
 
 @router.post("/consents", response_model=HealthcareConsent, status_code=status.HTTP_201_CREATED)
@@ -168,7 +213,21 @@ async def grant_consent(
     actor: TokenPayload = Depends(get_current_user_token),
 ) -> HealthcareConsent:
     """Grants a new consent directive across any of the 8 categories."""
-    subject_id = _resolve_subject(actor, payload.subject)
+    if actor.role == UserRole.CITIZEN:
+        subject_id = _resolve_subject(actor, payload.subject)
+    elif actor.role in [UserRole.CLINICIAN, UserRole.HEALTH_WORKER, UserRole.SYSTEM_ADMIN]:
+        subject_id = _validate_proxy_mandate(
+            actor=actor,
+            target_subject=payload.subject,
+            consent_artifact=payload.consent_artifact,
+            proxy_mandate=payload.proxy_mandate,
+            artifact_signature=payload.artifact_signature,
+        )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Role not permitted to grant consent directives.",
+        )
 
     consent = consent_manager.grant(
         subject=subject_id,
@@ -180,7 +239,7 @@ async def grant_consent(
         version=payload.version,
         notice_id=payload.notice_id,
         actor_id=actor.sub,
-        actor_role=actor.role.value,
+        actor_role=actor.role.value if hasattr(actor.role, "value") else str(actor.role),
     )
     # Mirror into store
     store.add_consent(consent)
@@ -249,11 +308,25 @@ async def modify_consent(
             detail=f"Consent directive '{consent_id}' not found.",
         )
 
-    subject_id = _resolve_subject(actor)
-    if actor.role == UserRole.CITIZEN and consent.subject != subject_id:
+    if actor.role == UserRole.CITIZEN:
+        subject_id = _resolve_subject(actor)
+        if consent.subject != subject_id and consent.subject != actor.sub:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot modify consent belonging to another citizen.",
+            )
+    elif actor.role in [UserRole.CLINICIAN, UserRole.HEALTH_WORKER, UserRole.SYSTEM_ADMIN]:
+        _validate_proxy_mandate(
+            actor=actor,
+            target_subject=consent.subject,
+            consent_artifact=payload.consent_artifact,
+            proxy_mandate=payload.proxy_mandate,
+            artifact_signature=payload.artifact_signature,
+        )
+    else:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cannot modify consent belonging to another citizen.",
+            detail="Role not permitted to modify consent directives.",
         )
 
     return consent_manager.modify(
@@ -262,7 +335,7 @@ async def modify_consent(
         new_expires_at=payload.new_expires_at,
         new_purpose=payload.new_purpose,
         actor_id=actor.sub,
-        actor_role=actor.role.value,
+        actor_role=actor.role.value if hasattr(actor.role, "value") else str(actor.role),
     )
 
 
@@ -280,11 +353,25 @@ async def revoke_consent(
             detail=f"Consent directive '{consent_id}' not found.",
         )
 
-    subject_id = _resolve_subject(actor)
-    if actor.role == UserRole.CITIZEN and consent.subject != subject_id:
+    if actor.role == UserRole.CITIZEN:
+        subject_id = _resolve_subject(actor)
+        if consent.subject != subject_id and consent.subject != actor.sub:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot revoke consent belonging to another citizen.",
+            )
+    elif actor.role in [UserRole.CLINICIAN, UserRole.HEALTH_WORKER, UserRole.SYSTEM_ADMIN]:
+        _validate_proxy_mandate(
+            actor=actor,
+            target_subject=consent.subject,
+            consent_artifact=payload.consent_artifact,
+            proxy_mandate=payload.proxy_mandate,
+            artifact_signature=payload.artifact_signature,
+        )
+    else:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cannot revoke consent belonging to another citizen.",
+            detail="Role not permitted to revoke consent directives.",
         )
 
     revoked = consent_manager.revoke(
@@ -303,6 +390,11 @@ async def revoke_wearable_access(
     actor: TokenPayload = Depends(get_current_user_token),
 ) -> Dict[str, Any]:
     """Quick one-click revocation of all wearable data streams for the citizen."""
+    if actor.role != UserRole.CITIZEN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only citizens can perform direct one-click wearable data stream revocation for their own records.",
+        )
     subject_id = _resolve_subject(actor)
     wearable_consents = consent_manager.list_consents(
         subject=subject_id,

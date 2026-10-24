@@ -270,3 +270,16 @@ class TestPublicHealthCommandCenterUX:
         assert "btn-lang-kn" in html
         # Large touch targets
         assert "min-height: 48px" in html or "min-height:48px" in html
+
+    def test_citizen_role_lock_and_switch_button_removed(self):
+        """Verify index.html removes switch role button for citizen and locks citizen to their portal."""
+        index_html_path = Path("services/api/static/index.html")
+        assert index_html_path.exists()
+        html = index_html_path.read_text(encoding="utf-8")
+
+        # Citizen RBAC check in switchTab
+        assert "currentUser.role === 'CITIZEN' && tabId !== 'citizen'" in html
+        # Switch button completely removed from user profile pill in renderAuthHeader
+        assert "Switch Role" not in html
+        # openAuthModal blocked for citizen
+        assert "currentUser && currentUser.token && currentUser.role === 'CITIZEN'" in html

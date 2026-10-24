@@ -243,9 +243,19 @@ def test_visual_svg_generation():
 # 4. API GATEWAY ENDPOINT TESTS
 # =========================================================================
 
-def test_api_get_citizen_trajectory_ramesh_patel():
+@pytest.fixture
+def auth_headers():
+    auth_res = client.post(
+        "/api/v1/auth/token",
+        json={"email": "doctor@sevahealth.ai", "password": "password123"}
+    )
+    token = auth_res.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_api_get_citizen_trajectory_ramesh_patel(auth_headers):
     # Ramesh has 3 seeded snapshots demonstrating WORSENING trajectory
-    response = client.get("/api/v1/trajectory/citizen-ramesh-patel-01")
+    response = client.get("/api/v1/trajectory/citizen-ramesh-patel-01", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
 
@@ -259,8 +269,8 @@ def test_api_get_citizen_trajectory_ramesh_patel():
     assert data["domain_trajectories"]["diabetes"]["change_percentage_from_baseline"] is not None
 
 
-def test_api_get_domain_trajectory():
-    response = client.get("/api/v1/trajectory/citizen-ramesh-patel-01/domain/diabetes")
+def test_api_get_domain_trajectory(auth_headers):
+    response = client.get("/api/v1/trajectory/citizen-ramesh-patel-01/domain/diabetes", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
 
@@ -271,12 +281,12 @@ def test_api_get_domain_trajectory():
     assert len(data["contributing_factors"]) > 0
 
 
-def test_api_get_domain_trajectory_invalid_domain_400():
-    response = client.get("/api/v1/trajectory/citizen-ramesh-patel-01/domain/invalid_domain_xyz")
+def test_api_get_domain_trajectory_invalid_domain_400(auth_headers):
+    response = client.get("/api/v1/trajectory/citizen-ramesh-patel-01/domain/invalid_domain_xyz", headers=auth_headers)
     assert response.status_code == 400
 
 
-def test_api_record_trajectory_snapshot():
+def test_api_record_trajectory_snapshot(auth_headers):
     now = datetime.now(timezone.utc)
     new_snapshot_payload = {
         "citizen_id": "citizen-priya-sharma-04",
@@ -306,21 +316,21 @@ def test_api_record_trajectory_snapshot():
         },
         "source": "CLINICAL_CHECKUP",
     }
-    response = client.post("/api/v1/trajectory/citizen-priya-sharma-04/snapshot", json=new_snapshot_payload)
+    response = client.post("/api/v1/trajectory/citizen-priya-sharma-04/snapshot", json=new_snapshot_payload, headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert data["total_snapshots"] >= 3
 
 
-def test_api_get_visual_html():
-    response = client.get("/api/v1/trajectory/citizen-ramesh-patel-01/visual")
+def test_api_get_visual_html(auth_headers):
+    response = client.get("/api/v1/trajectory/citizen-ramesh-patel-01/visual", headers=auth_headers)
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert "Longitudinal Risk Trajectory: Ramesh Patel" in response.text
 
 
-def test_api_get_visual_svg():
-    response = client.get("/api/v1/trajectory/citizen-ramesh-patel-01/svg")
+def test_api_get_visual_svg(auth_headers):
+    response = client.get("/api/v1/trajectory/citizen-ramesh-patel-01/svg", headers=auth_headers)
     assert response.status_code == 200
     assert "image/svg+xml" in response.headers["content-type"]
     assert "<svg" in response.text

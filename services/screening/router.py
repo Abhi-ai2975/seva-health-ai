@@ -13,9 +13,8 @@ from packages.clinical_models.terminology import LOINC_CODES
 from packages.clinical_models.unit_normalization import UnitNormalizer, NormalizedMeasurement
 from packages.auth.jwt import (
     get_current_user_token,
+    get_current_user_token_optional,
     TokenPayload,
-    oauth2_scheme,
-    decode_access_token,
 )
 from packages.auth.access_control import HealthcareAuthorizationEngine
 from packages.types.enums import AuditAction, UserRole
@@ -34,25 +33,6 @@ from packages.security.xss_guard import XSSSanitizer
 router = APIRouter(prefix="/screening", tags=["Preventive Screening Engine"])
 
 
-async def get_current_user_token_optional(
-    token: Optional[str] = Depends(oauth2_scheme)
-) -> TokenPayload:
-    """Optional bearer token dependency that falls back to a verified health worker context
-    for interactive portal submissions, development environments, and live demo flows.
-    """
-    if token:
-        try:
-            return decode_access_token(token)
-        except Exception:
-            pass
-    return TokenPayload(
-        sub="worker-asha-01",
-        tenant_id="tenant-karnataka-moh",
-        role=UserRole.HEALTH_WORKER,
-        scopes=["screening:create", "screening:read", "citizen:read"]
-    )
-
-
 @router.get("/questionnaire/config", response_model=QuestionnaireWorkflowProfile)
 async def get_questionnaire_config(
     workflow: str = "mvp_comprehensive"
@@ -66,7 +46,7 @@ async def get_questionnaire_config(
 @router.post("/evaluate-configurable", response_model=ScreeningEvaluationResponse)
 async def evaluate_configurable_screening(
     submission: ConfigurableScreeningSubmission,
-    current_user: TokenPayload = Depends(get_current_user_token_optional)
+    current_user: TokenPayload = Depends(get_current_user_token)
 ):
     """Processes dynamic questionnaire answers, generates structured LOINC observations,
     triggers NCD risk evaluation, and generates an explainable summary.

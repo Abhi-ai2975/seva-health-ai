@@ -38,21 +38,89 @@ def validate_password_strength(password: str) -> Tuple[bool, str]:
     return True, ""
 
 
+def is_bcrypt_hash(hashed_password: str) -> bool:
+    """Checks whether a hash string is a valid bcrypt hash format ($2b$ or $2a$)."""
+    return bool(hashed_password and (hashed_password.startswith("$2b$") or hashed_password.startswith("$2a$")))
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    try:
-        if hashed_password.startswith("$2b$") or hashed_password.startswith("$2a$"):
+    """Verifies a plain password against a stored hash using bcrypt exclusively.
+    Plaintext password comparisons are strictly disallowed.
+    Supports legacy unsalted single-iteration SHA-256 strictly for backward compatibility
+    to enable automatic migration to bcrypt on successful login.
+    """
+    if not plain_password or not hashed_password:
+        return False
+
+    if is_bcrypt_hash(hashed_password):
+        try:
             return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
-    except Exception:
-        pass
-    return hashlib.sha256(plain_password.encode("utf-8")).hexdigest() == hashed_password or plain_password == hashed_password
+        except Exception:
+            return False
+
+    # Transitional check for legacy unsalted SHA-256 (64 hex characters) to enable seamless migration
+    if len(hashed_password) == 64 and all(c in "0123456789abcdefABCDEF" for c in hashed_password):
+        import hmac
+        computed_sha = hashlib.sha256(plain_password.encode("utf-8")).hexdigest()
+        return hmac.compare_digest(computed_sha.lower(), hashed_password.lower())
+
+    # Plaintext comparison (plain_password == hashed_password) is strictly disallowed
+    return False
 
 
 def get_password_hash(password: str) -> str:
-    try:
-        salt = bcrypt.gensalt()
-        return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
-    except Exception:
-        return hashlib.sha256(password.encode("utf-8")).hexdigest()
+    """Hashes a password using bcrypt with a salt exclusively."""
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
+
+
+
+# Role-to-Scope Least-Privilege Mapping
+ROLE_SCOPES: Dict[UserRole, List[str]] = {
+    UserRole.CITIZEN: [
+        "citizen:read_self",
+        "consent:manage",
+        "observations:read_self",
+        "intervention:read_self",
+        "documents:read_self",
+    ],
+    UserRole.HEALTH_WORKER: [
+        "screening:create",
+        "screening:read",
+        "citizen:read",
+        "intervention:read",
+        "intervention:write",
+        "observations:create",
+        "observations:read",
+    ],
+    UserRole.CLINICIAN: [
+        "clinical:read",
+        "clinical:write",
+        "screening:read",
+        "screening:review",
+        "risk:read",
+        "risk:create",
+        "careplan:read",
+        "careplan:write",
+        "intervention:read",
+        "intervention:write",
+        "documents:read",
+        "documents:write",
+        "referral:manage",
+        "triage:manage",
+    ],
+    UserRole.PUBLIC_HEALTH_ADMIN: [
+        "population:read",
+        "analytics:read",
+        "reports:read",
+    ],
+    UserRole.SYSTEM_ADMIN: ["*"],
+}
+
+
+def get_scopes_for_role(role: UserRole) -> List[str]:
+    """Returns least-privilege authorized scopes according to authenticated role."""
+    return list(ROLE_SCOPES.get(role, ["citizen:read_self"]))
 
 
 def create_access_token(
@@ -69,12 +137,17 @@ def create_access_token(
     else:
         expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
 
+    if scopes is None:
+        effective_scopes = get_scopes_for_role(role)
+    else:
+        effective_scopes = list(scopes)
+
     token_jti = jti or str(uuid.uuid4())
     to_encode = {
         "sub": subject,
         "tenant_id": tenant_id,
         "role": role.value,
-        "scopes": scopes or [],
+        "scopes": effective_scopes,
         "jti": token_jti,
         "iat": int(now.timestamp()),
         "exp": int(expire.timestamp()),
@@ -146,20 +219,25 @@ async def get_current_user_token(
 async def get_current_user_token_optional(
     token: Optional[str] = Depends(oauth2_scheme)
 ) -> TokenPayload:
-    """Optional bearer token dependency that falls back to a verified context
-    for interactive portal submissions, development environments, and live demo flows.
+    """Bearer token dependency that strictly restricts mock fallback to development environments.
+    Never allows unauthenticated fallback in production, and never swallows invalid token errors.
     If a Bearer token is provided in the Authorization header, it is decoded and validated.
     """
     if token:
-        try:
-            return decode_access_token(token)
-        except Exception:
-            pass
-    return TokenPayload(
-        sub="worker-asha-01",
-        tenant_id="tenant-karnataka-moh",
-        role=UserRole.HEALTH_WORKER,
-        scopes=["screening:create", "screening:read", "citizen:read", "intervention:read", "intervention:write"]
+        return decode_access_token(token)
+
+    if settings.ENVIRONMENT == "development":
+        return TokenPayload(
+            sub="worker-asha-01",
+            tenant_id="tenant-karnataka-moh",
+            role=UserRole.HEALTH_WORKER,
+            scopes=["screening:create", "screening:read", "citizen:read", "intervention:read", "intervention:write"]
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication token required",
+        headers={"WWW-Authenticate": "Bearer"},
     )
 
 

@@ -287,6 +287,11 @@ def test_refresh_token_lifecycle():
 
 # 9. Password Strength & User Registration
 def test_registration_password_strength_and_uniqueness():
+    # Ensure clean state for test user
+    keys_to_del = [k for k, u in store.users.items() if getattr(u, "email", None) == "newcitizen@sevahealth.ai"]
+    for k in keys_to_del:
+        del store.users[k]
+
     # Weak password rejected
     weak_res = client.post("/api/v1/auth/register", json={
         "email": "weak@sevahealth.ai",

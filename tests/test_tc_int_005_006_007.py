@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 import uuid
 from typing import List, Dict, Any
 
-from packages.types.enums import UserRole
+from packages.types.enums import UserRole, Gender
 from services.wearable.models import (
     WearableProvider,
     WearableMetricType,
@@ -22,7 +22,7 @@ from services.wearable.adapter import (
     MockWearableProvider,
     wearable_adapter,
 )
-from services.store import store
+from services.store import store, CitizenRecord
 from packages.clinical_models.domain_models import (
     VitalSign,
     LabResult,
@@ -102,6 +102,23 @@ async def test_tc_int_005_wearable_sync_idempotency_avoids_duplicate_observation
     """
     adapter = OpenWearablesAdapter()
     citizen_id = f"citizen-idem-{uuid.uuid4().hex[:8]}"
+    store.add_citizen(
+        CitizenRecord(
+            id=citizen_id,
+            tenant_id="karnataka_state_health",
+            user_id=f"user-{citizen_id}",
+            abha_id="91-1234-5678-0002",
+            first_name="Idem",
+            last_name="Test",
+            birth_date="1982-01-01",
+            gender=Gender.MALE,
+            phone="+919876543211",
+            state="Karnataka",
+            district="Mysuru",
+            sub_district="Hunsur",
+            village_or_ward="Ward 2",
+        )
+    )
 
     # Connect provider
     await adapter.connect_provider(
@@ -397,7 +414,24 @@ async def test_tc_int_007_external_emr_failure_isolation_and_recovery():
         },
     )
 
-    # 2. Seed local store observations
+    # 2. Seed local store observations and citizen demographics
+    store.add_citizen(
+        CitizenRecord(
+            id=citizen_id,
+            tenant_id="karnataka_state_health",
+            user_id=f"user-{citizen_id}",
+            abha_id="91-1234-5678-0001",
+            first_name="Ramesh",
+            last_name="Patel",
+            birth_date="1978-04-12",
+            gender=Gender.MALE,
+            phone="+919876543210",
+            state="Karnataka",
+            district="Mysuru",
+            sub_district="Hunsur",
+            village_or_ward="Ward 1",
+        )
+    )
     from packages.clinical_models.observations import Observation
     local_obs = Observation(
         citizen_id=citizen_id,
